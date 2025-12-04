@@ -27,11 +27,10 @@ const App = () => (
               <Route path="/login" element={<Login />} />
               <Route
                 path="/admin"
-                element={
-                  <ProtectedRoute>
-                    <Admin />
-                  </ProtectedRoute>
-                }
+                element={<Admin />}
+                  // <ProtectedRoute>
+                  //   <Admin />
+                  // </ProtectedRoute>
               />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />

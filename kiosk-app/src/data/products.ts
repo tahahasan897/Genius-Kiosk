@@ -3,12 +3,13 @@ export interface Product {
   name: string;
   category: string;
   price: number;
-  aisle: number;
+  aisle: number | string;
   shelf: string;
   stockLevel: number;
   stockStatus: 'in-stock' | 'low-stock' | 'out-of-stock';
   image: string;
   description: string;
+  mapElementId?: number | null; // Link to smart pin on map
   mapX: number; // X coordinate on store map (percentage)
   mapY: number; // Y coordinate on store map (percentage)
 }

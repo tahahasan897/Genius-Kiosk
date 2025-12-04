@@ -5,7 +5,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Textarea } from '@/components/ui/textarea';
-import type { MapElement, NameVisibility } from './types';
+import type { MapElement, NameVisibility, AnimationStyle } from './types';
+import { animationStyleLabels } from './types';
 
 interface PropertiesPanelProps {
   element: MapElement | null;
@@ -24,13 +25,15 @@ const fontFamilies = [
 ];
 
 // Elements that support fill color
-const fillElements = ['rectangle', 'circle', 'polygon', 'triangle', 'trapezoid', 'parallelogram'];
+const fillElements = ['rectangle', 'circle', 'polygon', 'triangle', 'trapezoid', 'parallelogram', 'smart-pin', 'static-pin'];
 // Elements that support corner radius
 const cornerRadiusElements = ['rectangle', 'trapezoid', 'parallelogram', 'text'];
 // Elements that are line-based (no fill)
 const lineElements = ['line', 'arrow', 'freehand'];
 // Elements that need size controls
 const sizeElements = ['rectangle', 'circle', 'polygon', 'triangle', 'trapezoid', 'parallelogram', 'text'];
+// Pin elements
+const pinElements = ['smart-pin', 'static-pin'];
 
 const PropertiesPanel = ({ element, onUpdateElement }: PropertiesPanelProps) => {
   if (!element) {
@@ -48,11 +51,14 @@ const PropertiesPanel = ({ element, onUpdateElement }: PropertiesPanelProps) => 
   };
 
   const isTextElement = element.type === 'text';
+  const isPin = pinElements.includes(element.type);
+  const isSmartPin = element.type === 'smart-pin';
+  const isStaticPin = element.type === 'static-pin';
   const showFill = fillElements.includes(element.type);
   const showCornerRadius = cornerRadiusElements.includes(element.type);
   const showSize = sizeElements.includes(element.type);
   const showPolygonSides = element.type === 'polygon';
-  const showStroke = !isTextElement; // All shapes except text have stroke
+  const showStroke = !isTextElement && !isPin; // All shapes except text and pins have stroke
 
   return (
     <div className="h-full bg-card border-l border-border flex flex-col overflow-hidden">
@@ -124,6 +130,80 @@ const PropertiesPanel = ({ element, onUpdateElement }: PropertiesPanelProps) => 
           )}
 
           <Separator />
+
+          {/* Pin Properties */}
+          {isPin && (
+            <>
+              <div className="space-y-4">
+                {/* Pin Label - only for static pins */}
+                {isStaticPin && (
+                  <div className="space-y-2">
+                    <Label className="text-xs font-medium">Pin Label</Label>
+                    <Input
+                      value={element.pinLabel || ''}
+                      onChange={(e) => update({ pinLabel: e.target.value })}
+                      className="h-8 text-sm"
+                      placeholder="e.g., Restroom, Cashier, Exit..."
+                    />
+                    <p className="text-[10px] text-muted-foreground">
+                      This label will be displayed on the pin
+                    </p>
+                  </div>
+                )}
+
+                {/* Animation Style */}
+                <div className="space-y-2">
+                  <Label className="text-xs font-medium">Animation Style</Label>
+                  <Select
+                    value={String(element.animationStyle || 1)}
+                    onValueChange={(value) => update({ animationStyle: Number(value) as AnimationStyle })}
+                  >
+                    <SelectTrigger className="h-8 text-sm">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(Object.entries(animationStyleLabels) as [string, string][]).map(([value, label]) => (
+                        <SelectItem key={value} value={value}>
+                          {value}. {label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[10px] text-muted-foreground">
+                    Animation shown when pin is active on consumer map
+                  </p>
+                </div>
+
+                {/* Pin Color */}
+                <div className="space-y-2">
+                  <Label className="text-xs font-medium">Pin Color</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      type="color"
+                      value={element.fillColor}
+                      onChange={(e) => update({ fillColor: e.target.value })}
+                      className="w-10 h-8 p-1 cursor-pointer flex-shrink-0"
+                    />
+                    <Input
+                      value={element.fillColor}
+                      onChange={(e) => update({ fillColor: e.target.value })}
+                      className="flex-1 h-8 text-sm font-mono min-w-0"
+                    />
+                  </div>
+                </div>
+
+                {isSmartPin && (
+                  <div className="p-3 bg-muted/50 rounded-lg">
+                    <p className="text-xs text-muted-foreground">
+                      <span className="font-medium text-foreground">Tip:</span> Use the "Links" tab to connect products to this Smart Pin.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <Separator />
+            </>
+          )}
 
           {/* Text Content - Only for text elements */}
           {isTextElement && (

@@ -1,8 +1,11 @@
-export type ElementType = 'rectangle' | 'circle' | 'line' | 'arrow' | 'polygon' | 'text' | 'freehand' | 'triangle' | 'trapezoid' | 'parallelogram';
+export type ElementType = 'rectangle' | 'circle' | 'line' | 'arrow' | 'polygon' | 'text' | 'freehand' | 'triangle' | 'trapezoid' | 'parallelogram' | 'smart-pin' | 'static-pin';
 
-export type Tool = 'select' | 'rectangle' | 'circle' | 'line' | 'arrow' | 'polygon' | 'text' | 'freehand' | 'triangle' | 'trapezoid' | 'parallelogram';
+export type Tool = 'select' | 'rectangle' | 'circle' | 'line' | 'arrow' | 'polygon' | 'text' | 'freehand' | 'triangle' | 'trapezoid' | 'parallelogram' | 'smart-pin' | 'static-pin';
 
 export type NameVisibility = 'layers' | 'canvas' | 'both' | 'none';
+
+// Animation styles for pins: 1=Pulse, 2=Bounce, 3=Ripple, 4=Flash, 5=Glow
+export type AnimationStyle = 1 | 2 | 3 | 4 | 5;
 
 export interface MapElement {
   id: string;
@@ -42,7 +45,12 @@ export interface MapElement {
   // Name label position offset (relative to element)
   labelOffsetX?: number;
   labelOffsetY?: number;
+  // Pin-specific properties
+  animationStyle?: AnimationStyle;
+  pinLabel?: string; // Label for static pins (e.g., "Restroom", "Cashier")
   metadata?: any;
+  // Persistence flag to help with linking UX
+  persisted?: boolean;
 }
 
 export interface EditorState {
@@ -71,6 +79,29 @@ export const defaultElement: Partial<MapElement> = {
   showNameOn: 'both',
   labelOffsetX: 0,
   labelOffsetY: -25,
+  animationStyle: 1, // Default to Pulse
+};
+
+// Default pin element properties
+export const defaultSmartPin: Partial<MapElement> = {
+  ...defaultElement,
+  fillColor: '#ef4444', // Red for smart pins
+  fillOpacity: 1,
+  strokeColor: '#b91c1c',
+  strokeWidth: 2,
+  animationStyle: 1,
+  showNameOn: 'layers',
+};
+
+export const defaultStaticPin: Partial<MapElement> = {
+  ...defaultElement,
+  fillColor: '#22c55e', // Green for static pins
+  fillOpacity: 1,
+  strokeColor: '#15803d',
+  strokeWidth: 2,
+  animationStyle: 5, // Glow for static
+  showNameOn: 'canvas',
+  pinLabel: 'Label',
 };
 
 // Default sizes for click-to-place elements
@@ -85,6 +116,17 @@ export const defaultSizes: Record<ElementType, { width: number; height: number }
   triangle: { width: 80, height: 80 },
   trapezoid: { width: 120, height: 80 },
   parallelogram: { width: 120, height: 80 },
+  'smart-pin': { width: 40, height: 50 },
+  'static-pin': { width: 40, height: 50 },
+};
+
+// Animation style labels for UI
+export const animationStyleLabels: Record<AnimationStyle, string> = {
+  1: 'Pulse',
+  2: 'Bounce',
+  3: 'Ripple',
+  4: 'Flash',
+  5: 'Glow',
 };
 
 export const CANVAS_WIDTH = 1200;

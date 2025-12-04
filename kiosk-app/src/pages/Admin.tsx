@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Upload, Plus, Edit, Trash2, RefreshCw, LogOut } from 'lucide-react';
+import { Upload, Plus, Edit, Trash2, RefreshCw, LogOut, FileSpreadsheet, CheckCircle2, AlertCircle, Download, FileUp } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -69,6 +69,15 @@ const Admin = () => {
     description: '',
   });
 
+  // Import drag-and-drop state
+  const [isDragging, setIsDragging] = useState(false);
+  const [importResult, setImportResult] = useState<{
+    success: boolean;
+    imported: number;
+    total: number;
+    errors?: Array<{ row: number; error: string }>;
+  } | null>(null);
+
   const fetchProducts = async () => {
     setLoading(true);
     try {
@@ -91,25 +100,84 @@ const Admin = () => {
   const handleImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
+    await processImportFile(file);
+    event.target.value = '';
+  };
 
+  const processImportFile = async (file: File) => {
     setLoading(true);
+    setImportResult(null);
     try {
       const result = await importProducts(file, '1');
+      setImportResult({
+        success: true,
+        imported: result.imported,
+        total: result.total,
+        errors: result.errors,
+      });
       toast.success(`Successfully imported ${result.imported} of ${result.total} products`);
       if (result.errors && result.errors.length > 0) {
         console.error('Import errors:', result.errors);
-        toast.error(`${result.errors.length} products failed to import`);
       }
-      setIsImportDialogOpen(false);
       fetchProducts();
     } catch (error: any) {
       console.error('Import error:', error);
+      setImportResult({
+        success: false,
+        imported: 0,
+        total: 0,
+        errors: [{ row: 0, error: error.response?.data?.error || 'Failed to import products' }],
+      });
       toast.error(error.response?.data?.error || 'Failed to import products');
     } finally {
       setLoading(false);
-      // Reset file input
-      event.target.value = '';
     }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    const files = e.dataTransfer.files;
+    if (files.length > 0) {
+      const file = files[0];
+      if (file.name.endsWith('.csv') || file.type === 'text/csv') {
+        await processImportFile(file);
+      } else {
+        toast.error('Please drop a CSV file');
+      }
+    }
+  };
+
+  const downloadSampleCSV = () => {
+    const sampleData = `sku,product_name,description,category,base_price,aisle,shelf_position,stock_quantity,is_available,image_url
+APPL001,Red Apples,Fresh red apples from local farms,Produce,3.99,1,A,50,t,https://images.unsplash.com/photo-1560806887-1e4cd0b6cbd6?w=400
+MILK001,Whole Milk,Fresh whole milk 1 gallon,Dairy,4.29,2,B,30,t,https://images.unsplash.com/photo-1563636619-e9143da7973b?w=400
+BREAD001,White Bread,Soft white sandwich bread,Bakery,2.99,3,C,25,t,https://images.unsplash.com/photo-1549931319-a545dcf3bc73?w=400`;
+    
+    const blob = new Blob([sampleData], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'sample_products.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+    toast.success('Sample CSV downloaded!');
   };
 
   const handleCreateProduct = () => {
@@ -280,28 +348,46 @@ const Admin = () => {
                   </div>
                 ) : (
                   <>
-                    <div className="rounded-md border">
+                    <div className="rounded-md border overflow-x-auto">
                       <Table>
                         <TableHeader>
                           <TableRow>
+                            <TableHead className="w-16">Image</TableHead>
                             <TableHead>SKU</TableHead>
                             <TableHead>Name</TableHead>
                             <TableHead>Category</TableHead>
                             <TableHead>Price</TableHead>
                             <TableHead>Aisle</TableHead>
                             <TableHead>Shelf</TableHead>
+                            <TableHead className="max-w-[200px]">Description</TableHead>
                             <TableHead className="text-right">Actions</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
                           {products.map((product) => (
                             <TableRow key={product.product_id}>
+                              <TableCell>
+                                {product.image_url ? (
+                                  <img
+                                    src={product.image_url}
+                                    alt={product.product_name}
+                                    className="h-10 w-10 rounded object-cover"
+                                  />
+                                ) : (
+                                  <div className="h-10 w-10 rounded bg-muted flex items-center justify-center text-xs text-muted-foreground">
+                                    No img
+                                  </div>
+                                )}
+                              </TableCell>
                               <TableCell className="font-mono text-sm">{product.sku}</TableCell>
                               <TableCell className="font-medium">{product.product_name}</TableCell>
                               <TableCell>{product.category}</TableCell>
                               <TableCell>${Number(product.base_price).toFixed(2)}</TableCell>
                               <TableCell>{product.aisle || '-'}</TableCell>
                               <TableCell>{product.shelf || '-'}</TableCell>
+                              <TableCell className="max-w-[200px] truncate text-sm text-muted-foreground" title={product.description || ''}>
+                                {product.description || '-'}
+                              </TableCell>
                               <TableCell className="text-right">
                                 <div className="flex justify-end gap-2">
                                   <Button
@@ -355,38 +441,198 @@ const Admin = () => {
           </TabsContent>
 
           <TabsContent value="import" className="space-y-6">
-            <Card>
-              <CardHeader>
-                <CardTitle>Import Products from CSV</CardTitle>
-                <CardDescription>
-                  Upload a CSV file to bulk import products into your catalog
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="border-2 border-dashed border-border rounded-lg p-8 text-center">
-                  <Upload className="h-12 w-12 mx-auto mb-4 text-muted-foreground" />
-                  <p className="text-lg font-medium mb-2">Upload CSV File</p>
-                  <p className="text-sm text-muted-foreground mb-4">
-                    Select a CSV file with product data to import
-                  </p>
-                  <Input
-                    type="file"
-                    accept=".csv"
-                    onChange={handleImport}
-                    disabled={loading}
-                    className="max-w-xs mx-auto"
-                  />
-                </div>
-                <div className="bg-muted rounded-lg p-4 space-y-2">
-                  <p className="font-medium text-sm">CSV Format Requirements:</p>
-                  <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
-                    <li>Required columns: sku, product_name, category, base_price</li>
-                    <li>Optional columns: aisle, shelf, image_url, description</li>
-                    <li>First row should contain column headers</li>
-                  </ul>
-                </div>
-              </CardContent>
-            </Card>
+            <div className="grid gap-6 md:grid-cols-2">
+              {/* Upload Card */}
+              <Card className="md:col-span-1">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <FileUp className="h-5 w-5 text-primary" />
+                    Import Products
+                  </CardTitle>
+                  <CardDescription>
+                    Drag & drop or click to upload a CSV file
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop}
+                    className={`
+                      relative border-2 border-dashed rounded-xl p-8 text-center cursor-pointer
+                      transition-all duration-300 ease-in-out
+                      ${isDragging 
+                        ? 'border-primary bg-primary/10 scale-[1.02] shadow-lg shadow-primary/20' 
+                        : 'border-border hover:border-primary/50 hover:bg-muted/50'
+                      }
+                      ${loading ? 'opacity-50 pointer-events-none' : ''}
+                    `}
+                  >
+                    <input
+                      type="file"
+                      accept=".csv"
+                      onChange={handleImport}
+                      disabled={loading}
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                    />
+                    
+                    {loading ? (
+                      <div className="space-y-4">
+                        <div className="relative mx-auto w-16 h-16">
+                          <div className="absolute inset-0 rounded-full border-4 border-muted"></div>
+                          <div className="absolute inset-0 rounded-full border-4 border-primary border-t-transparent animate-spin"></div>
+                          <FileSpreadsheet className="absolute inset-0 m-auto h-6 w-6 text-primary" />
+                        </div>
+                        <p className="text-lg font-medium text-primary animate-pulse">Importing...</p>
+                        <p className="text-sm text-muted-foreground">Please wait while we process your file</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        <div className={`
+                          mx-auto w-16 h-16 rounded-full flex items-center justify-center
+                          transition-all duration-300
+                          ${isDragging 
+                            ? 'bg-primary text-primary-foreground scale-110' 
+                            : 'bg-muted text-muted-foreground'
+                          }
+                        `}>
+                          <Upload className={`h-8 w-8 transition-transform duration-300 ${isDragging ? 'scale-110 -translate-y-1' : ''}`} />
+                        </div>
+                        <div>
+                          <p className="text-lg font-semibold">
+                            {isDragging ? 'Drop your file here!' : 'Drag & drop your CSV file'}
+                          </p>
+                          <p className="text-sm text-muted-foreground mt-1">
+                            or <span className="text-primary font-medium underline underline-offset-2">browse</span> to choose a file
+                          </p>
+                        </div>
+                        <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
+                          <FileSpreadsheet className="h-4 w-4" />
+                          <span>CSV files only • Max 10MB</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Import Result */}
+                  {importResult && (
+                    <div className={`
+                      mt-4 p-4 rounded-lg border-2 animate-in fade-in slide-in-from-bottom-2 duration-300
+                      ${importResult.success 
+                        ? 'bg-green-50 border-green-200 dark:bg-green-950/30 dark:border-green-800' 
+                        : 'bg-red-50 border-red-200 dark:bg-red-950/30 dark:border-red-800'
+                      }
+                    `}>
+                      <div className="flex items-start gap-3">
+                        {importResult.success ? (
+                          <CheckCircle2 className="h-5 w-5 text-green-600 dark:text-green-400 mt-0.5 flex-shrink-0" />
+                        ) : (
+                          <AlertCircle className="h-5 w-5 text-red-600 dark:text-red-400 mt-0.5 flex-shrink-0" />
+                        )}
+                        <div className="flex-1">
+                          <p className={`font-medium ${importResult.success ? 'text-green-800 dark:text-green-200' : 'text-red-800 dark:text-red-200'}`}>
+                            {importResult.success 
+                              ? `Successfully imported ${importResult.imported} of ${importResult.total} products!`
+                              : 'Import failed'
+                            }
+                          </p>
+                          {importResult.errors && importResult.errors.length > 0 && (
+                            <div className="mt-2 text-sm">
+                              <p className="text-muted-foreground mb-1">
+                                {importResult.errors.length} error{importResult.errors.length > 1 ? 's' : ''}:
+                              </p>
+                              <ul className="list-disc list-inside space-y-0.5 text-muted-foreground max-h-24 overflow-y-auto">
+                                {importResult.errors.slice(0, 5).map((err, i) => (
+                                  <li key={i}>Row {err.row}: {err.error}</li>
+                                ))}
+                                {importResult.errors.length > 5 && (
+                                  <li className="text-muted-foreground/70">...and {importResult.errors.length - 5} more</li>
+                                )}
+                              </ul>
+                            </div>
+                          )}
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 w-6 p-0 hover:bg-transparent"
+                          onClick={() => setImportResult(null)}
+                        >
+                          ×
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Instructions Card */}
+              <Card className="md:col-span-1">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <FileSpreadsheet className="h-5 w-5 text-primary" />
+                    CSV Format Guide
+                  </CardTitle>
+                  <CardDescription>
+                    Prepare your data in the correct format
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {/* Required Fields */}
+                  <div className="p-3 rounded-lg bg-primary/5 border border-primary/20">
+                    <p className="font-medium text-sm flex items-center gap-2 text-primary">
+                      <CheckCircle2 className="h-4 w-4" />
+                      Required Columns
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {['sku', 'product_name', 'category', 'base_price'].map((col) => (
+                        <code key={col} className="px-2 py-0.5 bg-primary/10 text-primary rounded text-xs font-mono">
+                          {col}
+                        </code>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Optional Fields */}
+                  <div className="p-3 rounded-lg bg-muted/50 border border-border">
+                    <p className="font-medium text-sm text-muted-foreground">Optional Columns</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {['aisle', 'shelf_position', 'description', 'image_url', 'stock_quantity', 'is_available'].map((col) => (
+                        <code key={col} className="px-2 py-0.5 bg-muted text-muted-foreground rounded text-xs font-mono">
+                          {col}
+                        </code>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Tips */}
+                  <div className="space-y-2 text-sm text-muted-foreground">
+                    <p className="flex items-start gap-2">
+                      <span className="text-primary">•</span>
+                      First row must contain column headers
+                    </p>
+                    <p className="flex items-start gap-2">
+                      <span className="text-primary">•</span>
+                      Use <code className="text-xs bg-muted px-1 rounded">t</code> or <code className="text-xs bg-muted px-1 rounded">true</code> for is_available
+                    </p>
+                    <p className="flex items-start gap-2">
+                      <span className="text-primary">•</span>
+                      Duplicate SKUs will update existing products
+                    </p>
+                  </div>
+
+                  {/* Download Sample Button */}
+                  <Button 
+                    variant="outline" 
+                    className="w-full mt-2 gap-2"
+                    onClick={downloadSampleCSV}
+                  >
+                    <Download className="h-4 w-4" />
+                    Download Sample CSV
+                  </Button>
+                </CardContent>
+              </Card>
+            </div>
           </TabsContent>
 
           <TabsContent value="map" className="space-y-6">
