@@ -36,6 +36,9 @@ interface MapElement {
   sides?: number;
   animationStyle?: number;
   pinLabel?: string;
+  pinLabelFontSize?: number;
+  pinLabelColor?: string;
+  pinLabelFontWeight?: string;
   showNameOn?: string;
 }
 
@@ -130,6 +133,9 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
               sides: metadata.sides ?? 6,
               animationStyle: metadata.animationStyle ?? 1,
               pinLabel: metadata.pinLabel ?? '',
+              pinLabelFontSize: metadata.pinLabelFontSize ?? 12,
+              pinLabelColor: metadata.pinLabelColor ?? '#ffffff',
+              pinLabelFontWeight: metadata.pinLabelFontWeight ?? 'bold',
               showNameOn: metadata.showNameOn ?? 'layers',
             };
           }));
@@ -181,6 +187,31 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
   const getParallelogramPoints = (width: number, height: number): number[] => {
     const offset = width * 0.2;
     return [offset, 0, width, 0, width - offset, height, 0, height];
+  };
+
+  // Get proportional pin points for smart-pin and static-pin
+  const getPinPoints = (width: number, height: number): number[] => {
+    const cornerRadius = width * 0.125;
+    const topEdgeOffset = height * 0.2;
+    const topCornerOffset = height * 0.3;
+    const bottomSquareY = height * 0.3;
+    const vStartY = height * 0.2;
+    const vWidth = width * 0.125;
+    
+    return [
+      -width / 2 + cornerRadius, -height + topEdgeOffset,
+      width / 2 - cornerRadius, -height + topEdgeOffset,
+      width / 2, -height + topCornerOffset,
+      width / 2, -bottomSquareY,
+      width / 2 - cornerRadius, -vStartY,
+      vWidth, -vStartY,
+      0, 0,
+      -vWidth, -vStartY,
+      -width / 2 + cornerRadius, -vStartY,
+      -width / 2, -bottomSquareY,
+      -width / 2, -height + topCornerOffset,
+      -width / 2 + cornerRadius, -height + topEdgeOffset,
+    ];
   };
 
   // Get animation class based on style
@@ -329,23 +360,20 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
         );
       // Static pins are always visible
       case 'static-pin':
+        const staticPinPoints = getPinPoints(element.width, element.height);
+        // Use custom font size from properties, or fall back to default
+        const staticLabelFontSize = element.pinLabelFontSize || 12;
+        // The rectangular box spans from y=-0.8*height (top) to y=-0.3*height (bottom)
+        // Center of the box is at y = -0.55*height
+        const staticBoxTop = -element.height * 0.8;
+        const staticBoxBottom = -element.height * 0.3;
+        const staticBoxCenterY = (staticBoxTop + staticBoxBottom) / 2;
+        const staticLabelColor = element.pinLabelColor || '#ffffff';
+        const staticLabelFontWeight = element.pinLabelFontWeight || 'bold';
         return (
           <Group key={element.id} x={element.x} y={element.y}>
             <Line
-              points={[
-                -element.width / 2 + 5, -element.height + 10,
-                element.width / 2 - 5, -element.height + 10,
-                element.width / 2, -element.height + 15,
-                element.width / 2, -15,
-                element.width / 2 - 5, -10,
-                5, -10,
-                0, 0,
-                -5, -10,
-                -element.width / 2 + 5, -10,
-                -element.width / 2, -15,
-                -element.width / 2, -element.height + 15,
-                -element.width / 2 + 5, -element.height + 10,
-              ]}
+              points={staticPinPoints}
               closed={true}
               fill={element.fillColor}
               opacity={element.fillOpacity}
@@ -356,13 +384,13 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
             {element.pinLabel && (
               <KonvaText
                 text={element.pinLabel}
-                x={-element.width / 2}
-                y={-element.height + 25}
-                width={element.width}
-                fontSize={10}
-                fontFamily="Arial"
-                fontStyle="bold"
-                fill="#ffffff"
+                x={-element.width / 2 + 2}
+                y={staticBoxCenterY - staticLabelFontSize / 2}
+                width={element.width - 4}
+                fontSize={staticLabelFontSize}
+                fontFamily="Arial, sans-serif"
+                fontStyle={staticLabelFontWeight}
+                fill={staticLabelColor}
                 align="center"
               />
             )}
@@ -379,51 +407,81 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
       return null;
     }
 
+    const activePinPoints = getPinPoints(element.width, element.height);
+    // Calculate proportional inner rectangle dimensions
+    const innerRectWidth = element.width * 0.5;
+    const innerRectHeight = element.height * 0.35;
+    const innerRectY = -element.height + element.height * 0.25;
+    const innerRectRadius = Math.min(innerRectWidth, innerRectHeight) * 0.15;
+    
+    // Build location text from product data
+    const locationText = selectedProduct?.aisle 
+      ? `Aisle ${selectedProduct.aisle}${selectedProduct.shelf ? `, Shelf ${selectedProduct.shelf}` : ''}`
+      : 'Location';
+    
+    // Calculate bubble width based on text length
+    const bubbleWidth = Math.max(100, locationText.length * 8 + 20);
+    const bubbleHeight = 28;
+    const bubbleFontSize = Math.max(10, element.height * 0.22);
+
     return (
       <Group key={`active-${element.id}`} x={element.x} y={element.y}>
         {/* Animated pin body */}
         <Line
-          points={[
-            -element.width / 2 + 5, -element.height + 10,
-            element.width / 2 - 5, -element.height + 10,
-            element.width / 2, -element.height + 15,
-            element.width / 2, -15,
-            element.width / 2 - 5, -10,
-            5, -10,
-            0, 0,
-            -5, -10,
-            -element.width / 2 + 5, -10,
-            -element.width / 2, -15,
-            -element.width / 2, -element.height + 15,
-            -element.width / 2 + 5, -element.height + 10,
-          ]}
+          points={activePinPoints}
           closed={true}
           fill="#ef4444"
           stroke="#b91c1c"
           strokeWidth={2}
           lineJoin="round"
         />
+        {/* Inner centered rounded rectangle */}
+        <Rect
+          x={-innerRectWidth / 2}
+          y={innerRectY}
+          width={innerRectWidth}
+          height={innerRectHeight}
+          fill="#ffffff"
+          opacity={0.95}
+          cornerRadius={innerRectRadius}
+        />
         {/* Location info bubble */}
         {selectedProduct && (
           <>
             <Rect
-              x={-60}
-              y={-element.height - 35}
-              width={120}
-              height={30}
+              x={-bubbleWidth / 2}
+              y={-element.height - bubbleHeight - 8}
+              width={bubbleWidth}
+              height={bubbleHeight}
               fill="#1f2937"
               cornerRadius={6}
+              shadowColor="#000000"
+              shadowBlur={4}
+              shadowOpacity={0.3}
+              shadowOffsetY={2}
+            />
+            {/* Triangle pointer from bubble to pin */}
+            <Line
+              points={[
+                -6, -element.height - 8,
+                6, -element.height - 8,
+                0, -element.height + 2,
+              ]}
+              closed={true}
+              fill="#1f2937"
             />
             <KonvaText
-              text={`Aisle ${selectedProduct.aisle}${selectedProduct.shelf ? `, Shelf ${selectedProduct.shelf}` : ''}`}
-              x={-60}
-              y={-element.height - 30}
-              width={120}
-              fontSize={12}
+              text={locationText}
+              x={-bubbleWidth / 2}
+              y={-element.height - bubbleHeight - 2}
+              width={bubbleWidth}
+              height={bubbleHeight}
+              fontSize={bubbleFontSize}
               fontFamily="Arial"
               fontStyle="bold"
               fill="#ffffff"
               align="center"
+              verticalAlign="middle"
             />
           </>
         )}

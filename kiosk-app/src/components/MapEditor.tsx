@@ -30,6 +30,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     const [tool, setTool] = useState<Tool>('select');
     const [loading, setLoading] = useState(false);
     const [uploading, setUploading] = useState(false);
+    const [saving, setSaving] = useState(false);
     const [isDrawing, setIsDrawing] = useState(false);
     const [freehandPoints, setFreehandPoints] = useState<number[]>([]);
     const [showGrid, setShowGrid] = useState(true);
@@ -170,11 +171,17 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         };
     }, []);
 
-    // Immediate save function
-    const saveElements = useCallback(async (elementsToSave: MapElement[]) => {
-        if (elementsToSave.length === 0) return;
+    // Immediate save function - returns true on success, false on failure
+    const saveElements = useCallback(async (elementsToSave: MapElement[], showFeedback = false): Promise<boolean> => {
+        if (elementsToSave.length === 0) {
+            if (showFeedback) {
+                toast.error('No elements to save');
+            }
+            return false;
+        }
 
         try {
+            console.log(`[SAVE] Starting save for ${elementsToSave.length} elements...`);
             const convertedElements = elementsToSave.map(el => ({
                 ...el,
                 x: (el.x / CANVAS_WIDTH) * 100,
@@ -183,7 +190,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 height: (el.height / CANVAS_HEIGHT) * 100,
             }));
 
-            await fetch(
+            const response = await fetch(
                 `${API_URL}/api/admin/stores/${storeId}/map/elements`,
                 {
                     method: 'POST',
@@ -191,21 +198,120 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     body: JSON.stringify({ elements: convertedElements })
                 }
             );
-        } catch (error) {
-            console.error('Save failed:', error);
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+                const errorMessage = errorData.error || `Save failed with status ${response.status}`;
+                console.error('[SAVE] Failed:', errorMessage, response.status);
+                if (showFeedback) {
+                    toast.error(`Failed to save: ${errorMessage}`);
+                }
+                return false;
+            }
+
+            const result = await response.json();
+            console.log('[SAVE] Success!', result);
+            if (showFeedback) {
+                toast.success(`Map saved successfully! (${result.count || elementsToSave.length} elements)`);
+            }
+            return true;
+        } catch (error: any) {
+            console.error('[SAVE] Error:', error);
+            if (showFeedback) {
+                toast.error(`Save failed: ${error.message || 'Network error'}`);
+            }
+            return false;
         }
     }, [storeId]);
 
+    // Manual save handler with loading state and feedback
+    const handleManualSave = useCallback(async () => {
+        if (saving) return; // Prevent multiple simultaneous saves
+        
+        // Cancel any pending auto-save
+        if (autoSaveTimeoutRef.current) {
+            clearTimeout(autoSaveTimeoutRef.current);
+            autoSaveTimeoutRef.current = null;
+        }
+
+        // Store currently selected element frontend IDs to restore selection after reload
+        const selectedFrontendIds = selectedElementIds.slice();
+
+        setSaving(true);
+        try {
+            // Clear transformer nodes before reload to prevent stale node references
+            if (transformerRef.current) {
+                transformerRef.current.nodes([]);
+            }
+
+            const success = await saveElements(elements, true);
+            if (success) {
+                // Clear selection temporarily to prevent transformer from trying to use old nodes
+                setSelectedElementIds([]);
+                selectedElementIdsRef.current = [];
+                
+                // Save successful - reload map data to get updated database IDs
+                // This ensures frontend element IDs match backend IDs after save
+                await loadMapData();
+
+                // Restore selection by matching frontend IDs
+                // Wait for React to re-render the Konva stage with new elements before restoring selection
+                setTimeout(() => {
+                    const currentElements = elementsRef.current;
+                    const matchingIds: string[] = [];
+                    
+                    selectedFrontendIds.forEach(frontendId => {
+                        // Try to find element by current ID (might be the same if already database ID)
+                        const byCurrentId = currentElements.find(el => el.id === frontendId);
+                        if (byCurrentId) {
+                            matchingIds.push(byCurrentId.id);
+                            return;
+                        }
+                        
+                        // Try to find by frontendId stored in metadata
+                        const byMetadata = currentElements.find(el => {
+                            const metadata = el.metadata || {};
+                            return metadata.frontendId === frontendId || 
+                                   metadata.frontendId?.toString() === frontendId;
+                        });
+                        if (byMetadata) {
+                            matchingIds.push(byMetadata.id);
+                        }
+                    });
+                    
+                    if (matchingIds.length > 0) {
+                        setSelectedElementIds(matchingIds);
+                        selectedElementIdsRef.current = matchingIds;
+                    }
+                }, 300); // Increased timeout to ensure stage is fully re-rendered
+            }
+        } finally {
+            setSaving(false);
+        }
+    }, [elements, saving, saveElements, selectedElementIds]);
+
     // Auto-save with debounce
     const autoSave = useCallback(async () => {
+        // Don't auto-save if manual save is in progress
+        if (saving) {
+            if (autoSaveTimeoutRef.current) {
+                clearTimeout(autoSaveTimeoutRef.current);
+                autoSaveTimeoutRef.current = null;
+            }
+            return;
+        }
+
         if (autoSaveTimeoutRef.current) {
             clearTimeout(autoSaveTimeoutRef.current);
         }
 
         autoSaveTimeoutRef.current = setTimeout(async () => {
-            await saveElements(elementsRef.current);
+            // Double-check saving state before actually saving
+            if (!saving) {
+                await saveElements(elementsRef.current, false); // Silent auto-save
+            }
         }, 1000);
-    }, [saveElements]);
+    }, [saveElements, saving]);
 
     // Save on window close/navigation
     useEffect(() => {
@@ -235,9 +341,9 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         };
     }, [storeId, saveElements]);
 
-    // Trigger auto-save when elements change
+    // Trigger auto-save when elements change (but not during manual save)
     useEffect(() => {
-        if (mode === 'builder' && elements.length > 0) {
+        if (mode === 'builder' && elements.length > 0 && !saving) {
             autoSave();
         }
         return () => {
@@ -245,34 +351,49 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 clearTimeout(autoSaveTimeoutRef.current);
             }
         };
-    }, [elements, mode, autoSave]);
+    }, [elements, mode, autoSave, saving]);
 
     // Update transformer
     useEffect(() => {
-        if (selectedElementIds.length > 0 && transformerRef.current && !namingElementId && !editingTextId) {
-            const stage = transformerRef.current.getStage();
+        if (!transformerRef.current) return;
 
-            // Get all selected nodes that aren't lines or arrows (they use custom anchors)
-            const selectedNodes = selectedElementIds
-                .map(id => {
-                    const node = stage.findOne(`#${id}`);
-                    const element = elements.find(el => el.id === id);
-                    // Exclude line and arrow elements (they use custom anchors)
-                    if (element && (element.type === 'line' || element.type === 'arrow')) {
-                        return null;
-                    }
-                    return node;
-                })
-                .filter(node => node !== null);
+        // Clear transformer if no selection or during editing
+        if (selectedElementIds.length === 0 || namingElementId || editingTextId) {
+            transformerRef.current.nodes([]);
+            transformerRef.current.getLayer().batchDraw();
+            return;
+        }
 
-            if (selectedNodes.length > 0) {
+        const stage = transformerRef.current.getStage();
+        if (!stage) return;
+
+        // Get all selected nodes that aren't lines or arrows (they use custom anchors)
+        const selectedNodes = selectedElementIds
+            .map(id => {
+                const element = elements.find(el => el.id === id);
+                // Exclude line and arrow elements (they use custom anchors)
+                if (element && (element.type === 'line' || element.type === 'arrow')) {
+                    return null;
+                }
+                // Try to find the node on the stage
+                const node = stage.findOne(`#${id}`);
+                // Only return node if it exists and is valid
+                return node && node.getStage() === stage ? node : null;
+            })
+            .filter(node => node !== null && node !== undefined);
+
+        // Only set nodes if we have valid nodes
+        if (selectedNodes.length > 0) {
+            try {
                 transformerRef.current.nodes(selectedNodes);
                 transformerRef.current.getLayer().batchDraw();
-            } else {
+            } catch (error) {
+                // If there's an error (e.g., node was removed), clear transformer
+                console.warn('Transformer error, clearing nodes:', error);
                 transformerRef.current.nodes([]);
                 transformerRef.current.getLayer().batchDraw();
             }
-        } else if (transformerRef.current) {
+        } else {
             transformerRef.current.nodes([]);
             transformerRef.current.getLayer().batchDraw();
         }
@@ -366,7 +487,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     // This ensures all properties are preserved correctly
                     return {
                         id: el.id.toString(),
-                        type: metadata.type || el.type === 'department' || el.type === 'aisle' ? 'rectangle' : (el.type || metadata.element_type || 'rectangle'),
+                        type: (el.element_type === 'department' || el.element_type === 'aisle') ? 'rectangle' : (metadata.type || el.element_type || 'rectangle'),
                         name: metadata.name ?? el.name ?? '',
                         x: (el.x / 100) * CANVAS_WIDTH,
                         y: (el.y / 100) * CANVAS_HEIGHT,
@@ -644,6 +765,35 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
 
             // Auto-switch to select mode
             setTool('select');
+
+            // For smart-pin and static-pin, trigger immediate save and reload
+            // to ensure they get database IDs for product linking
+            if (newElement.type === 'smart-pin' || newElement.type === 'static-pin') {
+                const pinId = newElement.id;
+                // Cancel pending auto-save to avoid conflicts
+                if (autoSaveTimeoutRef.current) {
+                    clearTimeout(autoSaveTimeoutRef.current);
+                    autoSaveTimeoutRef.current = null;
+                }
+                // Use timeout to ensure state is updated first, then save and reload
+                setTimeout(async () => {
+                    const success = await saveElements(elementsRef.current, false);
+                    if (success) {
+                        await loadMapData();
+                        // Restore selection to the new pin by finding it via frontendId in metadata
+                        setTimeout(() => {
+                            const currentElements = elementsRef.current;
+                            const savedPin = currentElements.find(el => {
+                                const metadata = el.metadata || {};
+                                return metadata.frontendId === pinId || metadata.frontendId?.toString() === pinId;
+                            });
+                            if (savedPin) {
+                                setSelectedElementIds([savedPin.id]);
+                            }
+                        }, 100);
+                    }
+                }, 50);
+            }
         }
     };
 
@@ -1193,6 +1343,49 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         ];
     };
 
+    // Get proportional pin points for smart-pin and static-pin
+    // The pin has a square top and a V-shaped bottom anchor
+    // Coordinates use negative Y (upward from anchor point at 0,0)
+    const getPinPoints = (width: number, height: number): number[] => {
+        // Calculate proportional values based on pin size
+        // Base proportions from default 40x50: cornerRadius=5, offsets: 10, 15
+        const cornerRadius = width * 0.125; // 5/40 = 12.5% of width
+        const topEdgeOffset = height * 0.2; // 10/50 = 20% of height
+        const topCornerOffset = height * 0.3; // 15/50 = 30% of height
+        const bottomSquareY = height * 0.3; // 15/50 = 30% of height from bottom
+        const vStartY = height * 0.2; // 10/50 = 20% of height from bottom
+        const vWidth = width * 0.125; // 5/40 = 12.5% of width from center
+        
+        // Pin structure: square top with rounded corners, vertical sides, V-shaped bottom
+        // Y coordinates are negative (upward from anchor point)
+        return [
+            // Top-left rounded corner start
+            -width / 2 + cornerRadius, -height + topEdgeOffset,
+            // Top-right rounded corner start
+            width / 2 - cornerRadius, -height + topEdgeOffset,
+            // Top-right corner point (outer corner)
+            width / 2, -height + topCornerOffset,
+            // Right side - goes down to bottom of square
+            width / 2, -bottomSquareY,
+            // Right side - transition to V (inner corner)
+            width / 2 - cornerRadius, -vStartY,
+            // V tip (right side)
+            vWidth, -vStartY,
+            // V point (bottom center at 0, 0)
+            0, 0,
+            // V tip (left side)
+            -vWidth, -vStartY,
+            // Left side - transition from V (inner corner)
+            -width / 2 + cornerRadius, -vStartY,
+            // Left side - goes up to bottom of square
+            -width / 2, -bottomSquareY,
+            // Top-left corner point (outer corner)
+            -width / 2, -height + topCornerOffset,
+            // Close path back to start
+            -width / 2 + cornerRadius, -height + topEdgeOffset,
+        ];
+    };
+
     // Render element
     const renderElement = (element: MapElement) => {
         if (!element.visible) return null;
@@ -1659,24 +1852,17 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     </Group>
                 );
             case 'smart-pin':
+                const smartPinPoints = getPinPoints(element.width, element.height);
+                // Calculate proportional inner rectangle dimensions
+                const innerRectWidth = element.width * 0.5; // 50% of pin width
+                const innerRectHeight = element.height * 0.35; // 35% of pin height
+                const innerRectY = -element.height + element.height * 0.25; // Position in upper part
+                const innerRectRadius = Math.min(innerRectWidth, innerRectHeight) * 0.15; // Proportional corner radius
                 return (
                     <Group key={element.id} {...commonProps}>
                         {/* Pin shape - rounded rectangle with V anchor pointing down */}
                         <Line
-                            points={[
-                                -element.width / 2 + 5, -element.height + 10,
-                                element.width / 2 - 5, -element.height + 10,
-                                element.width / 2, -element.height + 15,
-                                element.width / 2, -15,
-                                element.width / 2 - 5, -10,
-                                5, -10,
-                                0, 0,
-                                -5, -10,
-                                -element.width / 2 + 5, -10,
-                                -element.width / 2, -15,
-                                -element.width / 2, -element.height + 15,
-                                -element.width / 2 + 5, -element.height + 10,
-                            ]}
+                            points={smartPinPoints}
                             closed={true}
                             fill={element.fillColor}
                             opacity={element.fillOpacity}
@@ -1684,23 +1870,21 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             strokeWidth={element.strokeWidth}
                             lineJoin="round"
                         />
+                        {/* Inner centered rounded rectangle - distinguishes smart pins */}
+                        <Rect
+                            x={-innerRectWidth / 2}
+                            y={innerRectY}
+                            width={innerRectWidth}
+                            height={innerRectHeight}
+                            fill="#ffffff"
+                            opacity={0.9}
+                            cornerRadius={innerRectRadius}
+                            listening={false}
+                        />
                         {/* Selection highlight */}
                         {isSelected && (
                             <Line
-                                points={[
-                                    -element.width / 2 + 5, -element.height + 10,
-                                    element.width / 2 - 5, -element.height + 10,
-                                    element.width / 2, -element.height + 15,
-                                    element.width / 2, -15,
-                                    element.width / 2 - 5, -10,
-                                    5, -10,
-                                    0, 0,
-                                    -5, -10,
-                                    -element.width / 2 + 5, -10,
-                                    -element.width / 2, -15,
-                                    -element.width / 2, -element.height + 15,
-                                    -element.width / 2 + 5, -element.height + 10,
-                                ]}
+                                points={smartPinPoints}
                                 closed={true}
                                 stroke="#3b82f6"
                                 strokeWidth={3}
@@ -1712,24 +1896,21 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     </Group>
                 );
             case 'static-pin':
+                const staticPinPoints = getPinPoints(element.width, element.height);
+                // Use custom font size from properties, or fall back to default
+                const labelFontSize = element.pinLabelFontSize || 12;
+                // The rectangular box spans from y=-0.8*height (top) to y=-0.3*height (bottom)
+                // Center of the box is at y = -0.55*height
+                const boxTop = -element.height * 0.8;
+                const boxBottom = -element.height * 0.3;
+                const boxCenterY = (boxTop + boxBottom) / 2;
+                const labelColor = element.pinLabelColor || '#ffffff';
+                const labelFontWeight = element.pinLabelFontWeight || 'bold';
                 return (
                     <Group key={element.id} {...commonProps}>
                         {/* Pin shape - rounded rectangle with V anchor pointing down */}
                         <Line
-                            points={[
-                                -element.width / 2 + 5, -element.height + 10,
-                                element.width / 2 - 5, -element.height + 10,
-                                element.width / 2, -element.height + 15,
-                                element.width / 2, -15,
-                                element.width / 2 - 5, -10,
-                                5, -10,
-                                0, 0,
-                                -5, -10,
-                                -element.width / 2 + 5, -10,
-                                -element.width / 2, -15,
-                                -element.width / 2, -element.height + 15,
-                                -element.width / 2 + 5, -element.height + 10,
-                            ]}
+                            points={staticPinPoints}
                             closed={true}
                             fill={element.fillColor}
                             opacity={element.fillOpacity}
@@ -1737,38 +1918,25 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             strokeWidth={element.strokeWidth}
                             lineJoin="round"
                         />
-                        {/* Pin label */}
-                        {element.pinLabel && (
-                            <KonvaText
-                                text={element.pinLabel}
-                                x={-element.width / 2}
-                                y={-element.height + 25}
-                                width={element.width}
-                                fontSize={10}
-                                fontFamily="Arial"
-                                fontStyle="bold"
-                                fill="#ffffff"
-                                align="center"
-                                listening={false}
-                            />
-                        )}
+                        {/* Pin label - centered in the rectangular box portion */}
+                        <KonvaText
+                            text={element.pinLabel || 'Click to edit'}
+                            x={-element.width / 2 + 2}
+                            y={boxCenterY - labelFontSize / 2}
+                            width={element.width - 4}
+                            fontSize={labelFontSize}
+                            fontFamily="Verdana, sans-serif"
+                            fontStyle={element.pinLabel ? labelFontWeight : 'normal'}
+                            fill={element.pinLabel ? labelColor : 'rgba(255,255,255,0.6)'}
+                            align="center"
+                            wrap="word"
+                            ellipsis={true}
+                            listening={false}
+                        />
                         {/* Selection highlight */}
                         {isSelected && (
                             <Line
-                                points={[
-                                    -element.width / 2 + 5, -element.height + 10,
-                                    element.width / 2 - 5, -element.height + 10,
-                                    element.width / 2, -element.height + 15,
-                                    element.width / 2, -15,
-                                    element.width / 2 - 5, -10,
-                                    5, -10,
-                                    0, 0,
-                                    -5, -10,
-                                    -element.width / 2 + 5, -10,
-                                    -element.width / 2, -15,
-                                    -element.width / 2, -element.height + 15,
-                                    -element.width / 2 + 5, -element.height + 10,
-                                ]}
+                                points={staticPinPoints}
                                 closed={true}
                                 stroke="#3b82f6"
                                 strokeWidth={3}
@@ -1855,9 +2023,13 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     <Button variant="outline" size="sm" onClick={handleResetZoom}>
                         {Math.round(scale * 100)}%
                     </Button>
-                    <Button onClick={() => saveElements(elements)} size="sm">
+                    <Button 
+                        onClick={handleManualSave} 
+                        size="sm" 
+                        disabled={saving}
+                    >
                         <Save className="h-4 w-4 mr-2" />
-                        Save
+                        {saving ? 'Saving...' : 'Save'}
                     </Button>
                 </div>
             </div>

@@ -48,6 +48,9 @@ export interface MapElement {
   // Pin-specific properties
   animationStyle?: AnimationStyle;
   pinLabel?: string; // Label for static pins (e.g., "Restroom", "Cashier")
+  pinLabelFontSize?: number; // Font size for pin label
+  pinLabelColor?: string; // Color for pin label text
+  pinLabelFontWeight?: 'normal' | 'bold'; // Font weight for pin label
   metadata?: any;
   // Persistence flag to help with linking UX
   persisted?: boolean;
@@ -102,6 +105,9 @@ export const defaultStaticPin: Partial<MapElement> = {
   animationStyle: 5, // Glow for static
   showNameOn: 'canvas',
   pinLabel: 'Label',
+  pinLabelFontSize: 14,
+  pinLabelColor: '#ffffff',
+  pinLabelFontWeight: 'bold',
 };
 
 // Default sizes for click-to-place elements

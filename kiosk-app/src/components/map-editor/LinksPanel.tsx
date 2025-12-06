@@ -32,16 +32,15 @@ const LinksPanel = ({ element, storeId }: LinksPanelProps) => {
   const [products, setProducts] = useState<ProductWithLink[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [processingProductId, setProcessingProductId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [linkedCount, setLinkedCount] = useState(0);
 
   // Check if element is a smart pin
   const isSmartPin = element?.type === 'smart-pin';
   
-  // Check if element has been saved (has a database ID)
-  // Temporary IDs are typically long timestamp strings, database IDs are usually shorter
-  // We'll show a helpful message if the pin hasn't been saved yet
-  const isUnsavedPin = element?.id && element.id.length > 10 && /^\d+$/.test(element.id);
+  // Track if pin is unsaved (not in database yet)
+  const [isUnsavedPin, setIsUnsavedPin] = useState(false);
 
   // Fetch products with link status
   const fetchProducts = useCallback(async () => {
@@ -72,7 +71,8 @@ const LinksPanel = ({ element, storeId }: LinksPanelProps) => {
         const errorMessage = errorData.error || 'Failed to fetch products';
         
         // If pin not found, it might be a new element that hasn't been saved yet
-        if (response.status === 404 || errorMessage.includes('not found') || errorMessage.includes('Pin not found')) {
+        if (response.status === 404 || errorMessage.includes('not found') || errorMessage.includes('Pin not found') || errorMessage.includes('save your map')) {
+          setIsUnsavedPin(true);
           setProducts([]);
           setLinkedCount(0);
           // Don't show error for unsaved pins - this is expected
@@ -82,6 +82,8 @@ const LinksPanel = ({ element, storeId }: LinksPanelProps) => {
         throw new Error(errorMessage);
       }
       
+      // Pin exists in database
+      setIsUnsavedPin(false);
       const data = await response.json();
       setProducts(data.products || []);
       setLinkedCount((data.products || []).filter((p: ProductWithLink) => p.is_linked).length);
@@ -111,13 +113,29 @@ const LinksPanel = ({ element, storeId }: LinksPanelProps) => {
 
   // Toggle product link
   const toggleProductLink = async (product: ProductWithLink) => {
-    if (!element?.id) return;
+    if (!element?.id) {
+      toast.error('No pin selected');
+      return;
+    }
+
+    // Check if pin needs to be saved first
+    const pinId = String(element.id);
+    
+    // Show immediate visual feedback by updating local state optimistically
+    const wasLinked = product.is_linked;
+    setProcessingProductId(product.product_id);
+    setProducts(prev => 
+      prev.map(p => 
+        p.product_id === product.product_id 
+          ? { ...p, is_linked: !wasLinked }
+          : p
+      )
+    );
+    setLinkedCount(prev => wasLinked ? prev - 1 : prev + 1);
 
     setSaving(true);
     try {
-      const pinId = String(element.id);
-      
-      if (product.is_linked) {
+      if (wasLinked) {
         // Unlink
         const response = await fetch(
           `${API_URL}/api/admin/stores/${storeId}/pins/${pinId}/unlink`,
@@ -130,18 +148,25 @@ const LinksPanel = ({ element, storeId }: LinksPanelProps) => {
         
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.error || 'Failed to unlink product');
-        }
+          const errorMsg = errorData.error || 'Failed to unlink product';
         
+          // Revert optimistic update on error
         setProducts(prev => 
           prev.map(p => 
             p.product_id === product.product_id 
-              ? { ...p, is_linked: false, link_id: null }
+                ? { ...p, is_linked: wasLinked }
               : p
           )
         );
-        setLinkedCount(prev => prev - 1);
-        toast.success(`Unlinked ${product.product_name}`);
+          setLinkedCount(prev => wasLinked ? prev + 1 : prev - 1);
+          
+          throw new Error(errorMsg);
+        }
+        
+        toast.success(`✓ Unlinked ${product.product_name}`);
+        
+        // Refresh the product list to get updated link status
+        await fetchProducts();
       } else {
         // Link
         const response = await fetch(
@@ -155,24 +180,36 @@ const LinksPanel = ({ element, storeId }: LinksPanelProps) => {
         
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.error || 'Failed to link product');
-        }
+          const errorMsg = errorData.error || 'Failed to link product';
         
+          // Revert optimistic update on error
         setProducts(prev => 
           prev.map(p => 
             p.product_id === product.product_id 
-              ? { ...p, is_linked: true }
+                ? { ...p, is_linked: wasLinked }
               : p
           )
         );
-        setLinkedCount(prev => prev + 1);
-        toast.success(`Linked ${product.product_name}`);
+          setLinkedCount(prev => wasLinked ? prev + 1 : prev - 1);
+          
+          // Provide helpful error message
+          if (errorMsg.includes('not found') || errorMsg.includes('Pin not found')) {
+            throw new Error('Please save your map first, then try linking again.');
+          }
+          throw new Error(errorMsg);
+        }
+        
+        toast.success(`✓ Linked ${product.product_name} to smart pin`);
+        
+        // Refresh the product list to get updated link status
+        await fetchProducts();
       }
     } catch (error: any) {
       console.error('Error toggling link:', error);
       toast.error(error.message || 'Failed to update link');
     } finally {
       setSaving(false);
+      setProcessingProductId(null);
     }
   };
 
@@ -305,8 +342,13 @@ const LinksPanel = ({ element, storeId }: LinksPanelProps) => {
       {/* Header */}
       <div className="p-4 border-b border-border space-y-3 flex-shrink-0">
         {isUnsavedPin && (
-          <div className="mb-2 p-2 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded text-xs text-yellow-800 dark:text-yellow-200">
-            Save the map first to link products to this pin.
+          <div className="mb-2 p-3 bg-yellow-50 dark:bg-yellow-900/30 border-2 border-yellow-400 dark:border-yellow-600 rounded-lg">
+            <p className="text-sm font-semibold text-yellow-900 dark:text-yellow-100 mb-1">
+              ⚠️ Map Not Saved
+            </p>
+            <p className="text-xs text-yellow-800 dark:text-yellow-200">
+              Please click the <strong>Save</strong> button in the editor toolbar to save this pin to the database before linking products.
+            </p>
           </div>
         )}
         <div className="flex items-center justify-between">
@@ -376,16 +418,36 @@ const LinksPanel = ({ element, storeId }: LinksPanelProps) => {
                 <div
                   key={product.product_id}
                   className={`
-                    flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-colors
-                    ${product.is_linked ? 'bg-primary/10 border border-primary/20' : 'hover:bg-muted/50'}
+                    flex items-center gap-3 p-2 rounded-lg transition-all duration-200 relative
+                    ${processingProductId === product.product_id ? 'opacity-60 cursor-wait' : ''}
+                    ${!isUnsavedPin && processingProductId !== product.product_id ? 'cursor-pointer hover:bg-muted/70 hover:scale-[1.01]' : 'cursor-not-allowed'}
+                    ${product.is_linked 
+                      ? 'bg-primary/10 border border-primary/30 shadow-sm' 
+                      : 'border border-transparent hover:border-border'
+                    }
                   `}
-                  onClick={() => !isUnsavedPin && toggleProductLink(product)}
+                  onClick={() => {
+                    if (processingProductId === product.product_id || saving) return;
+                    
+                    if (isUnsavedPin) {
+                      toast.info('Please save your map first before linking products');
+                    } else {
+                      toggleProductLink(product);
+                    }
+                  }}
                 >
+                  {processingProductId === product.product_id ? (
+                    <Loader2 className="h-4 w-4 animate-spin text-primary flex-shrink-0" />
+                  ) : (
                   <Checkbox
                     checked={product.is_linked}
-                    disabled={saving || isUnsavedPin}
+                      disabled={saving || isUnsavedPin || processingProductId === product.product_id}
                     className="pointer-events-none"
+                      onCheckedChange={() => {
+                        // Prevent checkbox from being toggled directly - use the row click instead
+                      }}
                   />
+                  )}
                   
                   {product.image_url ? (
                     <img

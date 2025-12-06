@@ -4,7 +4,7 @@ import csv from 'csv-parser';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { query } from '../db.js';
+import pool, { query } from '../db.js';
 
 const router = express.Router();
 const __filename = fileURLToPath(import.meta.url);
@@ -24,7 +24,7 @@ const storage = multer.diskStorage({
   }
 });
 
-const upload = multer({ 
+const upload = multer({
   storage: storage,
   fileFilter: (req, file, cb) => {
     if (file.mimetype === 'text/csv' || file.originalname.endsWith('.csv')) {
@@ -49,7 +49,7 @@ const imageStorage = multer.diskStorage({
   }
 });
 
-const imageUpload = multer({ 
+const imageUpload = multer({
   storage: imageStorage,
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('image/')) {
@@ -64,12 +64,30 @@ const imageUpload = multer({
 // Get all products (admin view)
 router.get('/products', async (req, res) => {
   try {
-    const { page = 1, limit = 50 } = req.query;
+    const { page = 1, limit = 50, storeId = 1 } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
+    const storeIdParam = parseInt(storeId);
 
+    // JOIN with store_inventory to get aisle and shelf data
     const result = await query(
-      `SELECT * FROM products ORDER BY product_id LIMIT $1 OFFSET $2`,
-      [parseInt(limit), offset]
+      `SELECT 
+        p.product_id,
+        p.sku,
+        p.product_name,
+        p.category,
+        p.base_price,
+        p.image_url,
+        p.description,
+        p.created_at,
+        si.aisle,
+        si.shelf_position as shelf,
+        si.stock_quantity,
+        si.is_available
+       FROM products p
+       LEFT JOIN store_inventory si ON p.product_id = si.product_id AND si.store_id = $1
+       ORDER BY p.product_id
+       LIMIT $2 OFFSET $3`,
+      [storeIdParam, parseInt(limit), offset]
     );
 
     const countResult = await query('SELECT COUNT(*) FROM products');
@@ -92,7 +110,9 @@ router.get('/products', async (req, res) => {
 
 // Create new product
 router.post('/products', async (req, res) => {
+  const client = await pool.connect();
   try {
+    await client.query('BEGIN');
     const {
       sku,
       product_name,
@@ -101,34 +121,72 @@ router.post('/products', async (req, res) => {
       aisle,
       shelf,
       image_url,
-      description
+      description,
+      storeId = 1 // Default to store 1
     } = req.body;
 
     if (!sku || !product_name || !category || !base_price) {
+      await client.query('ROLLBACK');
+      client.release();
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    const result = await query(
-      `INSERT INTO products (sku, product_name, category, base_price, aisle, shelf, image_url, description)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    // Get chain_id from store
+    const storeResult = await client.query('SELECT chain_id FROM stores WHERE store_id = $1', [storeId]);
+    const chainId = storeResult.rows[0]?.chain_id;
+
+    // Insert into products table
+    const productResult = await client.query(
+      `INSERT INTO products (sku, product_name, category, base_price, image_url, description, chain_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
-      [sku, product_name, category, parseFloat(base_price), aisle, shelf, image_url, description]
+      [sku, product_name, category, parseFloat(base_price), image_url, description, chainId]
     );
 
-    res.status(201).json(result.rows[0]);
+    const newProduct = productResult.rows[0];
+
+    // Insert into store_inventory table
+    // We need to handle aisle and shelf (shelf_position)
+    if (aisle || shelf) {
+      await client.query(
+        `INSERT INTO store_inventory (store_id, product_id, aisle, shelf_position, stock_quantity, is_available)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (store_id, product_id) DO UPDATE SET
+           aisle = EXCLUDED.aisle,
+           shelf_position = EXCLUDED.shelf_position,
+           last_updated = CURRENT_TIMESTAMP`,
+        [storeId, newProduct.product_id, aisle || null, shelf || null, 0, true] // Default stock 0, available true
+      );
+    }
+
+    await client.query('COMMIT');
+
+    // Return product with inventory data
+    const finalResult = {
+      ...newProduct,
+      aisle,
+      shelf
+    };
+
+    res.status(201).json(finalResult);
   } catch (error) {
+    await client.query('ROLLBACK');
     console.error('Error creating product:', error);
     if (error.code === '23505') {
       res.status(400).json({ error: 'Product with this SKU already exists' });
     } else {
       res.status(500).json({ error: 'Failed to create product' });
     }
+  } finally {
+    client.release();
   }
 });
 
 // Update product
 router.put('/products/:id', async (req, res) => {
+  const client = await pool.connect();
   try {
+    await client.query('BEGIN');
     const { id } = req.params;
     const {
       sku,
@@ -138,27 +196,65 @@ router.put('/products/:id', async (req, res) => {
       aisle,
       shelf,
       image_url,
-      description
+      description,
+      storeId = 1 // Default to store 1
     } = req.body;
 
-    const result = await query(
-      `UPDATE products 
-       SET sku = $1, product_name = $2, category = $3, base_price = $4, 
-           aisle = $5, shelf = $6, image_url = $7, description = $8,
-           updated_at = CURRENT_TIMESTAMP
-       WHERE product_id = $9
+    // Update products table
+    const productResult = await client.query(
+      `UPDATE products
+       SET sku = $1, product_name = $2, category = $3, base_price = $4,
+           image_url = $5, description = $6
+       WHERE product_id = $7
        RETURNING *`,
-      [sku, product_name, category, parseFloat(base_price), aisle, shelf, image_url, description, id]
+      [sku, product_name, category, parseFloat(base_price), image_url, description, id]
     );
 
-    if (result.rows.length === 0) {
+    if (productResult.rows.length === 0) {
+      await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Product not found' });
     }
 
-    res.json(result.rows[0]);
+    const updatedProduct = productResult.rows[0];
+
+    // Update or insert into store_inventory table
+    if (aisle !== undefined || shelf !== undefined) {
+      await client.query(
+        `INSERT INTO store_inventory (store_id, product_id, aisle, shelf_position, stock_quantity, is_available)
+         VALUES ($1, $2, $3, $4, 0, TRUE)
+         ON CONFLICT (store_id, product_id) DO UPDATE SET
+           aisle = COALESCE(EXCLUDED.aisle, store_inventory.aisle),
+           shelf_position = COALESCE(EXCLUDED.shelf_position, store_inventory.shelf_position),
+           last_updated = CURRENT_TIMESTAMP`,
+        [storeId, id, aisle || null, shelf || null]
+      );
+    }
+
+    await client.query('COMMIT');
+
+    // Fetch updated inventory details to return a complete product object
+    const inventoryResult = await client.query(
+      `SELECT aisle, shelf_position FROM store_inventory WHERE store_id = $1 AND product_id = $2`,
+      [storeId, id]
+    );
+
+    const inventoryData = inventoryResult.rows[0] || {};
+
+    res.json({
+      ...updatedProduct,
+      aisle: inventoryData.aisle,
+      shelf: inventoryData.shelf_position
+    });
   } catch (error) {
+    await client.query('ROLLBACK');
     console.error('Error updating product:', error);
-    res.status(500).json({ error: 'Failed to update product' });
+    if (error.code === '23505') {
+      res.status(400).json({ error: 'Product with this SKU already exists' });
+    } else {
+      res.status(500).json({ error: 'Failed to update product', details: error.message });
+    }
+  } finally {
+    client.release();
   }
 });
 
@@ -167,8 +263,8 @@ router.delete('/products/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    // First delete from product_stores
-    await query('DELETE FROM product_stores WHERE product_id = $1', [id]);
+    // First delete from store_inventory (the correct table)
+    await query('DELETE FROM store_inventory WHERE product_id = $1', [id]);
 
     const result = await query('DELETE FROM products WHERE product_id = $1 RETURNING *', [id]);
 
@@ -198,7 +294,12 @@ router.post('/import-products', upload.single('file'), async (req, res) => {
       fs.createReadStream(filePath)
         .pipe(csv())
         .on('data', (row) => {
-          products.push(row);
+          // Normalize keys to lowercase to handle potential case issues
+          const normalizedRow = {};
+          Object.keys(row).forEach(key => {
+            normalizedRow[key.trim().toLowerCase()] = row[key];
+          });
+          products.push(normalizedRow);
         })
         .on('end', resolve)
         .on('error', reject);
@@ -211,55 +312,101 @@ router.post('/import-products', upload.single('file'), async (req, res) => {
 
     let imported = 0;
     let errors = [];
+    const storeId = req.body.storeId || 1;
 
     // Insert products
     for (let i = 0; i < products.length; i++) {
       const product = products[i];
+      const client = await pool.connect();
       try {
+        await client.query('BEGIN');
+
         const {
           sku,
           product_name,
           category,
           base_price,
           aisle,
-          shelf,
+          shelf_position,
+          shelf, // Handle both shelf and shelf_position
           image_url,
-          description
+          description,
+          stock_quantity,
+          is_available
         } = product;
 
+        // Validate required fields
         if (!sku || !product_name || !category || !base_price) {
-          errors.push({ row: i + 2, error: 'Missing required fields', data: product });
+          errors.push({ row: i + 2, error: 'Missing required fields (sku, product_name, category, base_price)', data: product });
+          await client.query('ROLLBACK');
           continue;
         }
 
-        // Try to insert or update
-        await query(
-          `INSERT INTO products (sku, product_name, category, base_price, aisle, shelf, image_url, description)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-           ON CONFLICT (sku) DO UPDATE SET
+        // Get chain_id from store
+        const storeResult = await client.query('SELECT chain_id FROM stores WHERE store_id = $1', [storeId]);
+        const chainId = storeResult.rows[0]?.chain_id;
+
+        // Insert or Update Product
+        const productResult = await client.query(
+          `INSERT INTO products (sku, product_name, category, base_price, image_url, description, chain_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           ON CONFLICT (chain_id, sku) DO UPDATE SET
              product_name = EXCLUDED.product_name,
              category = EXCLUDED.category,
              base_price = EXCLUDED.base_price,
-             aisle = EXCLUDED.aisle,
-             shelf = EXCLUDED.shelf,
              image_url = EXCLUDED.image_url,
-             description = EXCLUDED.description,
-             updated_at = CURRENT_TIMESTAMP`,
+             description = EXCLUDED.description
+           RETURNING product_id`,
           [
             sku,
             product_name,
             category,
             parseFloat(base_price) || 0,
-            aisle || null,
-            shelf || null,
             image_url || null,
-            description || null
+            description || null,
+            chainId
           ]
         );
 
+        const productId = productResult.rows[0].product_id;
+
+        // Insert or Update Inventory
+        // Use shelf_position if available, otherwise shelf
+        const finalShelf = shelf_position || shelf;
+        const stock = parseInt(stock_quantity) || 0;
+        // Handle is_available: 't', 'true', '1', etc.
+        let available = true;
+        if (is_available !== undefined && is_available !== null && is_available !== '') {
+          const val = String(is_available).toLowerCase();
+          available = (val === 't' || val === 'true' || val === '1' || val === 'yes');
+        }
+
+        await client.query(
+          `INSERT INTO store_inventory (store_id, product_id, aisle, shelf_position, stock_quantity, is_available)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (store_id, product_id) DO UPDATE SET
+             aisle = EXCLUDED.aisle,
+             shelf_position = EXCLUDED.shelf_position,
+             stock_quantity = EXCLUDED.stock_quantity,
+             is_available = EXCLUDED.is_available,
+             last_updated = CURRENT_TIMESTAMP`,
+          [
+            storeId,
+            productId,
+            aisle || null,
+            finalShelf || null,
+            stock,
+            available
+          ]
+        );
+
+        await client.query('COMMIT');
         imported++;
       } catch (error) {
+        await client.query('ROLLBACK');
         errors.push({ row: i + 2, error: error.message, data: product });
+      } finally {
+        client.release();
       }
     }
 
@@ -275,7 +422,7 @@ router.post('/import-products', upload.single('file'), async (req, res) => {
   } catch (error) {
     console.error('Error importing products:', error);
     if (req.file) {
-      fs.unlinkSync(req.file.path);
+      try { fs.unlinkSync(req.file.path); } catch (e) { }
     }
     res.status(500).json({ error: 'Failed to import products', details: error.message });
   }
@@ -286,16 +433,16 @@ router.get('/stores/:id/map', async (req, res) => {
   try {
     const { id } = req.params;
     const storeResult = await query('SELECT * FROM stores WHERE store_id = $1', [id]);
-    
+
     if (storeResult.rows.length === 0) {
       return res.status(404).json({ error: 'Store not found' });
     }
-    
+
     const elementsResult = await query(
       'SELECT * FROM store_map_elements WHERE store_id = $1 ORDER BY z_index, id',
       [id]
     );
-    
+
     res.json({
       store: storeResult.rows[0],
       elements: elementsResult.rows.map(row => ({
@@ -323,34 +470,34 @@ router.post('/stores/:id/map/image', (req, res, next) => {
 }, async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     // Check if file was uploaded
     if (!req.file) {
       return res.status(400).json({ error: 'No image file provided. Please select an image file.' });
     }
-    
+
     // Validate file type
     if (!req.file.mimetype.startsWith('image/')) {
       fs.unlinkSync(req.file.path);
       return res.status(400).json({ error: 'Invalid file type. Please upload an image file (JPG, PNG, GIF, etc.)' });
     }
-    
+
     // Save relative path for serving
     const imageUrl = `/uploads/maps/${req.file.filename}`;
-    
+
     // Verify store exists
     const storeCheck = await query('SELECT store_id FROM stores WHERE store_id = $1', [id]);
     if (storeCheck.rows.length === 0) {
       fs.unlinkSync(req.file.path);
       return res.status(404).json({ error: 'Store not found' });
     }
-    
+
     // Update store with new map image URL
     await query(
       'UPDATE stores SET map_image_url = $1 WHERE store_id = $2',
       [imageUrl, id]
     );
-    
+
     res.json({ success: true, imageUrl });
   } catch (error) {
     console.error('Error updating map image:', error);
@@ -361,8 +508,8 @@ router.post('/stores/:id/map/image', (req, res, next) => {
         console.error('Error deleting uploaded file:', unlinkError);
       }
     }
-    res.status(500).json({ 
-      error: 'Failed to update map image', 
+    res.status(500).json({
+      error: 'Failed to update map image',
       details: error.message || 'An unexpected error occurred'
     });
   }
@@ -370,27 +517,68 @@ router.post('/stores/:id/map/image', (req, res, next) => {
 
 // Save map elements
 router.post('/stores/:id/map/elements', async (req, res) => {
+  const client = await pool.connect();
   try {
     const { id } = req.params;
     const { elements } = req.body;
-    
+
     if (!Array.isArray(elements)) {
+      client.release();
       return res.status(400).json({ error: 'Elements must be an array' });
     }
-    
-    // Delete existing elements
-    await query('DELETE FROM store_map_elements WHERE store_id = $1', [id]);
-    
-    // Insert new elements
+
+    await client.query('BEGIN');
+
+    // STEP 1: Get existing elements and build ID mappings
+    const existingElements = await client.query(
+      'SELECT id, metadata FROM store_map_elements WHERE store_id = $1',
+      [id]
+    );
+
+    // Build map: frontendId -> old database ID (and also dbId -> dbId)
+    const frontendIdToOldDbId = new Map();
+    existingElements.rows.forEach(row => {
+      const metadata = typeof row.metadata === 'string' ? JSON.parse(row.metadata) : (row.metadata || {});
+      const frontendId = metadata.frontendId || row.id.toString();
+      frontendIdToOldDbId.set(frontendId, row.id);
+      // Also map by database ID in case frontend uses that as element ID after reload
+      frontendIdToOldDbId.set(row.id.toString(), row.id);
+    });
+
+    // STEP 2: BEFORE deleting elements, save all product links with their frontend ID mapping
+    // This is crucial because DELETE CASCADE will remove all product_map_links
+    const existingLinks = await client.query(
+      `SELECT pml.product_id, pml.map_element_id, sme.metadata
+       FROM product_map_links pml
+       JOIN store_map_elements sme ON pml.map_element_id = sme.id
+       WHERE pml.store_id = $1`,
+      [id]
+    );
+
+    // Build a list of links with their frontend IDs for later restoration
+    const savedLinks = existingLinks.rows.map(link => {
+      const metadata = typeof link.metadata === 'string' ? JSON.parse(link.metadata) : (link.metadata || {});
+      const frontendId = metadata.frontendId || link.map_element_id.toString();
+      return {
+        productId: link.product_id,
+        frontendId: frontendId,
+        oldDbId: link.map_element_id
+      };
+    });
+
+    // STEP 3: Delete existing elements (CASCADE will delete product_map_links)
+    await client.query('DELETE FROM store_map_elements WHERE store_id = $1', [id]);
+
+    // STEP 4: Insert new elements and track the new database IDs
+    const frontendIdToNewDbId = new Map();
+
     for (const element of elements) {
-      // Extract metadata: save all properties except those that have dedicated columns
       const { type, name, x, y, width, height, color, zIndex, metadata, ...restProperties } = element;
-      
-      // Merge rest properties with existing metadata to preserve everything
+
       const fullMetadata = {
         ...(metadata || {}),
         ...restProperties,
-        // Explicitly include important properties that might be missing
+        type: element.type, // Store type in metadata for frontend to use
         showNameOn: element.showNameOn,
         labelOffsetX: element.labelOffsetX,
         labelOffsetY: element.labelOffsetY,
@@ -411,12 +599,16 @@ router.post('/stores/:id/map/elements', async (req, res) => {
         points: element.points,
         freehandPoints: element.freehandPoints,
         sides: element.sides,
+        animationStyle: element.animationStyle,
+        pinLabel: element.pinLabel,
+        frontendId: element.id,
       };
-      
-      await query(
-        `INSERT INTO store_map_elements 
-         (store_id, element_type, name, x, y, width, height, color, z_index, metadata)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+
+      const insertResult = await client.query(
+        `INSERT INTO store_map_elements
+          (store_id, element_type, name, x, y, width, height, color, z_index, metadata)
+         VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         RETURNING id`,
         [
           id,
           element.type,
@@ -430,12 +622,45 @@ router.post('/stores/:id/map/elements', async (req, res) => {
           JSON.stringify(fullMetadata)
         ]
       );
+
+      const newDbId = insertResult.rows[0].id;
+      frontendIdToNewDbId.set(element.id.toString(), newDbId);
+      // Also map by the old database ID if this element had one
+      const oldDbId = frontendIdToOldDbId.get(element.id.toString());
+      if (oldDbId) {
+        frontendIdToNewDbId.set(oldDbId.toString(), newDbId);
+      }
     }
-    
+
+    // STEP 5: Restore product links using the new element IDs
+    for (const link of savedLinks) {
+      // Try to find the new database ID for this element
+      // First try by frontendId, then by oldDbId
+      let newDbId = frontendIdToNewDbId.get(link.frontendId);
+      if (!newDbId) {
+        newDbId = frontendIdToNewDbId.get(link.oldDbId.toString());
+      }
+
+      if (newDbId) {
+        // Re-insert the product link with the new element ID
+        await client.query(
+          `INSERT INTO product_map_links (store_id, product_id, map_element_id)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (store_id, product_id, map_element_id) DO NOTHING`,
+          [id, link.productId, newDbId]
+        );
+      }
+    }
+
+    await client.query('COMMIT');
+
     res.json({ success: true, count: elements.length });
   } catch (error) {
+    await client.query('ROLLBACK');
     console.error('Error saving map elements:', error);
     res.status(500).json({ error: 'Failed to save map elements', details: error.message });
+  } finally {
+    client.release();
   }
 });
 
@@ -443,26 +668,415 @@ router.post('/stores/:id/map/elements', async (req, res) => {
 router.delete('/stores/:id/map/image', async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     // Verify store exists
     const storeCheck = await query('SELECT store_id FROM stores WHERE store_id = $1', [id]);
     if (storeCheck.rows.length === 0) {
       return res.status(404).json({ error: 'Store not found' });
     }
-    
+
     // Clear map image URL
     await query(
       'UPDATE stores SET map_image_url = NULL WHERE store_id = $1',
       [id]
     );
-    
+
     // Also delete all elements
     await query('DELETE FROM store_map_elements WHERE store_id = $1', [id]);
-    
+
     res.json({ success: true });
   } catch (error) {
     console.error('Error deleting map:', error);
     res.status(500).json({ error: 'Failed to delete map', details: error.message });
+  }
+});
+
+// ============================================
+// SMART PIN PRODUCT LINKING ENDPOINTS
+// ============================================
+
+// Helper function to update smart pin metadata with linked product locations
+const updatePinLocationMetadata = async (client, storeId, elementDbId) => {
+  try {
+    // Get all linked products' location info for this pin
+    const locationResult = await client.query(
+      `SELECT DISTINCT si.aisle, si.shelf_position as shelf
+       FROM product_map_links pml
+       JOIN store_inventory si ON pml.product_id = si.product_id AND si.store_id = pml.store_id
+       WHERE pml.store_id = $1 AND pml.map_element_id = $2
+       AND si.aisle IS NOT NULL
+       ORDER BY si.aisle, si.shelf_position`,
+      [storeId, elementDbId]
+    );
+
+    // Build location summary
+    const locations = locationResult.rows;
+    let locationSummary = null;
+    
+    if (locations.length > 0) {
+      // Get unique aisles
+      const aisles = [...new Set(locations.map(l => l.aisle).filter(Boolean))];
+      // Get unique shelves
+      const shelves = [...new Set(locations.map(l => l.shelf).filter(Boolean))];
+      
+      locationSummary = {
+        aisles: aisles,
+        shelves: shelves,
+        primaryAisle: aisles[0] || null,
+        primaryShelf: shelves[0] || null,
+        locationCount: locations.length
+      };
+    }
+
+    // Update the pin's metadata with location info
+    await client.query(
+      `UPDATE store_map_elements 
+       SET metadata = jsonb_set(
+         COALESCE(metadata, '{}'::jsonb),
+         '{linkedLocations}',
+         $1::jsonb
+       ),
+       updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2`,
+      [JSON.stringify(locationSummary), elementDbId]
+    );
+
+    return locationSummary;
+  } catch (error) {
+    console.error('Error updating pin location metadata:', error);
+    // Don't throw - this is a non-critical update
+    return null;
+  }
+};
+
+// Helper function to resolve element database ID from frontend ID or database ID
+// The frontend may send timestamp-based IDs that need to be looked up in the database
+const resolveElementId = async (storeId, pinId) => {
+  // First, try to parse as integer and check if it's a valid database ID
+  const parsedId = parseInt(pinId);
+  if (!isNaN(parsedId) && parsedId > 0 && parsedId <= 2147483647) {
+    // Check if this ID exists in the database
+    const checkResult = await query(
+      'SELECT id FROM store_map_elements WHERE id = $1 AND store_id = $2',
+      [parsedId, storeId]
+    );
+    if (checkResult.rows.length > 0) {
+      return parsedId;
+    }
+  }
+  
+  // If not found as database ID, try to find by frontend ID stored in metadata
+  // We stored frontend IDs in metadata.frontendId when saving
+  const searchResult = await query(
+    `SELECT id FROM store_map_elements 
+     WHERE store_id = $1 
+     AND metadata->>'frontendId' = $2`,
+    [storeId, pinId.toString()]
+  );
+  
+  if (searchResult.rows.length > 0) {
+    return searchResult.rows[0].id;
+  }
+  
+  // If still not found, return null (element might not be saved yet)
+  return null;
+};
+
+// Get all products linked to a specific pin
+router.get('/stores/:storeId/pins/:pinId/products', async (req, res) => {
+  try {
+    const { storeId, pinId } = req.params;
+
+    // Resolve the database element ID from frontend ID or database ID
+    const elementDbId = await resolveElementId(storeId, pinId);
+    if (!elementDbId) {
+      return res.status(404).json({ error: 'Pin not found. Please save your map first before linking products.' });
+    }
+
+    // Get linked products with product details
+    const result = await query(
+      `SELECT 
+        p.product_id,
+        p.sku,
+        p.product_name,
+        p.category,
+        p.base_price,
+        p.image_url,
+        p.description,
+        si.aisle,
+        si.shelf_position as shelf,
+        pml.link_id,
+        pml.created_at as linked_at
+       FROM product_map_links pml
+       JOIN products p ON pml.product_id = p.product_id
+       LEFT JOIN store_inventory si ON p.product_id = si.product_id AND si.store_id = $1
+       WHERE pml.store_id = $1 AND pml.map_element_id = $2
+       ORDER BY p.product_name`,
+      [storeId, elementDbId]
+    );
+
+    res.json({
+      pinId: parseInt(pinId),
+      storeId: parseInt(storeId),
+      linkedProducts: result.rows,
+      count: result.rows.length
+    });
+  } catch (error) {
+    console.error('Error fetching linked products:', error);
+    res.status(500).json({ error: 'Failed to fetch linked products', details: error.message });
+  }
+});
+
+// Link products to a pin (bulk operation)
+router.post('/stores/:storeId/pins/:pinId/link', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { storeId, pinId } = req.params;
+    const { productIds } = req.body;
+
+    if (!Array.isArray(productIds) || productIds.length === 0) {
+      return res.status(400).json({ error: 'productIds must be a non-empty array' });
+    }
+
+    await client.query('BEGIN');
+
+    // Resolve the database element ID from frontend ID or database ID
+    const elementDbId = await resolveElementId(storeId, pinId);
+    if (!elementDbId) {
+      await client.query('ROLLBACK');
+      client.release();
+      return res.status(404).json({ error: 'Pin not found. Please save your map first before linking products.' });
+    }
+
+    // Verify pin exists
+    const pinCheck = await client.query(
+      'SELECT id FROM store_map_elements WHERE id = $1 AND store_id = $2',
+      [elementDbId, storeId]
+    );
+    if (pinCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
+      client.release();
+      return res.status(404).json({ error: 'Pin not found' });
+    }
+
+    let linked = 0;
+    let errors = [];
+
+    for (const productId of productIds) {
+      try {
+        await client.query(
+          `INSERT INTO product_map_links (store_id, product_id, map_element_id)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (store_id, product_id, map_element_id) DO NOTHING`,
+          [storeId, productId, elementDbId]
+        );
+        linked++;
+      } catch (err) {
+        errors.push({ productId, error: err.message });
+      }
+    }
+
+    // Update the smart pin's metadata with location info from linked products
+    const locationSummary = await updatePinLocationMetadata(client, storeId, elementDbId);
+
+    await client.query('COMMIT');
+
+    res.json({
+      success: true,
+      linked,
+      total: productIds.length,
+      locationSummary,
+      errors: errors.length > 0 ? errors : undefined
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error linking products:', error);
+    res.status(500).json({ error: 'Failed to link products', details: error.message });
+  } finally {
+    client.release();
+  }
+});
+
+// Unlink products from a pin (bulk operation)
+router.delete('/stores/:storeId/pins/:pinId/unlink', async (req, res) => {
+  try {
+    const { storeId, pinId } = req.params;
+    const { productIds } = req.body;
+
+    if (!Array.isArray(productIds) || productIds.length === 0) {
+      return res.status(400).json({ error: 'productIds must be a non-empty array' });
+    }
+
+    // Resolve the database element ID from frontend ID or database ID
+    const elementDbId = await resolveElementId(storeId, pinId);
+    if (!elementDbId) {
+      return res.status(404).json({ error: 'Pin not found. Please save your map first before unlinking products.' });
+    }
+
+    // Delete the links
+    const result = await query(
+      `DELETE FROM product_map_links 
+       WHERE store_id = $1 AND map_element_id = $2 AND product_id = ANY($3)
+       RETURNING link_id`,
+      [storeId, elementDbId, productIds]
+    );
+
+    // Update the smart pin's metadata with remaining location info
+    // Use a simple client wrapper for the helper
+    const clientWrapper = { query: (sql, params) => query(sql, params) };
+    const locationSummary = await updatePinLocationMetadata(clientWrapper, storeId, elementDbId);
+
+    res.json({
+      success: true,
+      unlinked: result.rows.length,
+      total: productIds.length,
+      locationSummary
+    });
+  } catch (error) {
+    console.error('Error unlinking products:', error);
+    res.status(500).json({ error: 'Failed to unlink products', details: error.message });
+  }
+});
+
+// Get all products with their link status for a specific pin
+router.get('/stores/:storeId/pins/:pinId/products/all', async (req, res) => {
+  try {
+    const { storeId, pinId } = req.params;
+    const { search = '', page = 1, limit = 50 } = req.query;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    // Resolve the database element ID from frontend ID or database ID
+    const elementDbId = await resolveElementId(storeId, pinId);
+    if (!elementDbId) {
+      return res.status(404).json({ error: 'Pin not found. Please save your map first before linking products.' });
+    }
+
+    // Get all products with link status
+    let sql = `
+      SELECT 
+        p.product_id,
+        p.sku,
+        p.product_name,
+        p.category,
+        p.base_price,
+        p.image_url,
+        si.aisle,
+        si.shelf_position as shelf,
+        CASE WHEN pml.link_id IS NOT NULL THEN true ELSE false END as is_linked,
+        pml.link_id
+       FROM products p
+       LEFT JOIN store_inventory si ON p.product_id = si.product_id AND si.store_id = $1
+       LEFT JOIN product_map_links pml ON p.product_id = pml.product_id AND pml.store_id = $1 AND pml.map_element_id = $2
+    `;
+    
+    const params = [storeId, elementDbId];
+    
+    if (search) {
+      sql += ` WHERE (LOWER(p.product_name) LIKE $3 OR LOWER(p.sku) LIKE $3 OR LOWER(p.category) LIKE $3)`;
+      params.push(`%${search.toLowerCase()}%`);
+    }
+    
+    sql += ` ORDER BY p.product_name LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    params.push(parseInt(limit), offset);
+
+    const result = await query(sql, params);
+
+    // Get total count
+    let countSql = 'SELECT COUNT(*) FROM products p';
+    const countParams = [];
+    if (search) {
+      countSql += ` WHERE (LOWER(p.product_name) LIKE $1 OR LOWER(p.sku) LIKE $1 OR LOWER(p.category) LIKE $1)`;
+      countParams.push(`%${search.toLowerCase()}%`);
+    }
+    const countResult = await query(countSql, countParams);
+    const total = parseInt(countResult.rows[0].count);
+
+    res.json({
+      products: result.rows,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / parseInt(limit))
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching products with link status:', error);
+    res.status(500).json({ error: 'Failed to fetch products', details: error.message });
+  }
+});
+
+// Sync product links for a pin (replace all links)
+router.put('/stores/:storeId/pins/:pinId/link', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { storeId, pinId } = req.params;
+    const { productIds } = req.body;
+
+    if (!Array.isArray(productIds)) {
+      return res.status(400).json({ error: 'productIds must be an array' });
+    }
+
+    await client.query('BEGIN');
+
+    // Resolve the database element ID from frontend ID or database ID
+    const elementDbId = await resolveElementId(storeId, pinId);
+    if (!elementDbId) {
+      await client.query('ROLLBACK');
+      client.release();
+      return res.status(404).json({ error: 'Pin not found. Please save your map first before linking products.' });
+    }
+
+    // Verify pin exists
+    const pinCheck = await client.query(
+      'SELECT id FROM store_map_elements WHERE id = $1 AND store_id = $2',
+      [elementDbId, storeId]
+    );
+    if (pinCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
+      client.release();
+      return res.status(404).json({ error: 'Pin not found' });
+    }
+
+    // Delete all existing links for this pin
+    await client.query(
+      'DELETE FROM product_map_links WHERE store_id = $1 AND map_element_id = $2',
+      [storeId, elementDbId]
+    );
+
+    // Insert new links
+    let linked = 0;
+    for (const productId of productIds) {
+      try {
+        await client.query(
+          `INSERT INTO product_map_links (store_id, product_id, map_element_id)
+           VALUES ($1, $2, $3)`,
+          [storeId, productId, elementDbId]
+        );
+        linked++;
+      } catch (err) {
+        // Skip duplicates or invalid product IDs
+        console.error('Error linking product:', productId, err.message);
+      }
+    }
+
+    // Update the smart pin's metadata with location info from linked products
+    const locationSummary = await updatePinLocationMetadata(client, storeId, elementDbId);
+
+    await client.query('COMMIT');
+
+    res.json({
+      success: true,
+      linked,
+      locationSummary,
+      total: productIds.length
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error syncing product links:', error);
+    res.status(500).json({ error: 'Failed to sync product links', details: error.message });
+  } finally {
+    client.release();
   }
 });
 

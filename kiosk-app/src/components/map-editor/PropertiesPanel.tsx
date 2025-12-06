@@ -137,18 +137,64 @@ const PropertiesPanel = ({ element, onUpdateElement }: PropertiesPanelProps) => 
               <div className="space-y-4">
                 {/* Pin Label - only for static pins */}
                 {isStaticPin && (
-                  <div className="space-y-2">
-                    <Label className="text-xs font-medium">Pin Label</Label>
-                    <Input
-                      value={element.pinLabel || ''}
-                      onChange={(e) => update({ pinLabel: e.target.value })}
-                      className="h-8 text-sm"
-                      placeholder="e.g., Restroom, Cashier, Exit..."
-                    />
-                    <p className="text-[10px] text-muted-foreground">
-                      This label will be displayed on the pin
-                    </p>
-                  </div>
+                  <>
+                    <div className="space-y-2">
+                      <Label className="text-xs font-medium">Pin Label</Label>
+                      <Input
+                        value={element.pinLabel || ''}
+                        onChange={(e) => update({ pinLabel: e.target.value })}
+                        className="h-8 text-sm"
+                        placeholder="e.g., Restroom, Cashier, Exit..."
+                      />
+                      <p className="text-[10px] text-muted-foreground">
+                        This label will be displayed on the pin
+                      </p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-xs font-medium">Label Font Size: {element.pinLabelFontSize || 12}px</Label>
+                      <Slider
+                        value={[element.pinLabelFontSize || 12]}
+                        onValueChange={([value]) => update({ pinLabelFontSize: value })}
+                        min={6}
+                        max={24}
+                        step={1}
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-xs font-medium">Label Weight</Label>
+                      <Select
+                        value={element.pinLabelFontWeight || 'bold'}
+                        onValueChange={(value: 'normal' | 'bold') => update({ pinLabelFontWeight: value })}
+                      >
+                        <SelectTrigger className="h-8 text-sm">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="normal">Normal</SelectItem>
+                          <SelectItem value="bold">Bold</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label className="text-xs font-medium">Label Color</Label>
+                      <div className="flex gap-2">
+                        <Input
+                          type="color"
+                          value={element.pinLabelColor || '#ffffff'}
+                          onChange={(e) => update({ pinLabelColor: e.target.value })}
+                          className="w-10 h-8 p-1 cursor-pointer flex-shrink-0"
+                        />
+                        <Input
+                          value={element.pinLabelColor || '#ffffff'}
+                          onChange={(e) => update({ pinLabelColor: e.target.value })}
+                          className="flex-1 h-8 text-sm font-mono min-w-0"
+                        />
+                      </div>
+                    </div>
+                  </>
                 )}
 
                 {/* Animation Style */}

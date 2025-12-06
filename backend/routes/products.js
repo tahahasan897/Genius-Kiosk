@@ -46,6 +46,7 @@ router.get('/search', async (req, res) => {
         p.base_price as current_price,
         COALESCE(si.is_available, true) as in_stock,
         COALESCE(si.stock_quantity, 0) as stock_quantity,
+        pml.map_element_id,
         -- Calculate comprehensive relevance score
         (
           -- Exact match gets highest score
@@ -74,6 +75,7 @@ router.get('/search', async (req, res) => {
         ) as relevance_score
       FROM products p
       LEFT JOIN store_inventory si ON p.product_id = si.product_id AND si.store_id = $2
+      LEFT JOIN product_map_links pml ON p.product_id = pml.product_id AND pml.store_id = $2
       WHERE p.chain_id = $3
       AND (
         -- Exact and partial matches
@@ -147,6 +149,7 @@ router.get('/search', async (req, res) => {
         stockStatus: stockStatus,
         image: row.image_url || '',
         description: row.description || '',
+        mapElementId: row.map_element_id || null, // Smart pin link
         mapX: 50,
         mapY: 50,
       };
@@ -212,9 +215,11 @@ router.get('/', async (req, res) => {
         p.description,
         p.base_price as current_price,
         COALESCE(si.is_available, true) as in_stock,
-        COALESCE(si.stock_quantity, 0) as stock_quantity
+        COALESCE(si.stock_quantity, 0) as stock_quantity,
+        pml.map_element_id
       FROM products p
       LEFT JOIN store_inventory si ON p.product_id = si.product_id AND si.store_id = $1
+      LEFT JOIN product_map_links pml ON p.product_id = pml.product_id AND pml.store_id = $1
     `;
 
     params.push(storeIdParam);
@@ -262,6 +267,7 @@ router.get('/', async (req, res) => {
         stockStatus: stockStatus,
         image: row.image_url || '',
         description: row.description || '',
+        mapElementId: row.map_element_id || null, // Smart pin link
         mapX: 50,
         mapY: 50,
       };
