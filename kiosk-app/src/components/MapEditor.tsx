@@ -1,5 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Upload, Trash2, Hammer, ArrowLeft, ZoomIn, ZoomOut, Maximize, Grid, Save } from 'lucide-react';
+import { Upload, Trash2, Hammer, ArrowLeft, ZoomIn, ZoomOut, Maximize, Grid, Save, Loader2, AlertTriangle } from 'lucide-react';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
@@ -31,6 +34,14 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     const [loading, setLoading] = useState(false);
     const [uploading, setUploading] = useState(false);
     const [saving, setSaving] = useState(false);
+    const [autoSaving, setAutoSaving] = useState(false);
+    const [showExitWarning, setShowExitWarning] = useState(false); // Exit warning dialog
+    const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false); // Track if changes made since last save
+    const [hasExistingWork, setHasExistingWork] = useState(false); // Track if user has existing map/elements
+    const [dontRemindSave, setDontRemindSave] = useState(() => {
+        // Load preference from localStorage
+        return localStorage.getItem('mapEditor-dontRemindSave') === 'true';
+    });
     const [isDrawing, setIsDrawing] = useState(false);
     const [freehandPoints, setFreehandPoints] = useState<number[]>([]);
     const [showGrid, setShowGrid] = useState(true);
@@ -76,6 +87,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     const isUndoRedoRef = useRef(false); // Track if we're in undo/redo
     const isShiftPressedRef = useRef(false); // Track Shift key for proportional resizing
     const dragStartPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map()); // Track drag start positions
+    const initialLoadRef = useRef(true); // Track initial load to detect changes
+    const lastSavedStateRef = useRef<string>(''); // Track last saved state for change detection
 
     // Keep refs in sync with state
     useEffect(() => {
@@ -211,6 +224,9 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
 
             const result = await response.json();
             console.log('[SAVE] Success!', result);
+            // Clear unsaved changes flag and update saved state reference
+            setHasUnsavedChanges(false);
+            lastSavedStateRef.current = JSON.stringify(elementsToSave.map(el => ({ id: el.id, x: el.x, y: el.y, width: el.width, height: el.height })));
             if (showFeedback) {
                 toast.success(`Map saved successfully! (${result.count || elementsToSave.length} elements)`);
             }
@@ -308,14 +324,32 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         autoSaveTimeoutRef.current = setTimeout(async () => {
             // Double-check saving state before actually saving
             if (!saving) {
+                setAutoSaving(true);
+                const startTime = Date.now();
                 await saveElements(elementsRef.current, false); // Silent auto-save
+                // Ensure indicator shows for at least 500ms to avoid flickering
+                const elapsed = Date.now() - startTime;
+                if (elapsed < 500) {
+                    await new Promise(resolve => setTimeout(resolve, 500 - elapsed));
+                }
+                setAutoSaving(false);
             }
-        }, 1000);
+        }, 1500); // Increased debounce to 1.5 seconds
     }, [saveElements, saving]);
 
-    // Save on window close/navigation
+    // Save on window close/navigation and warn user
+    const dontRemindSaveRef = useRef(dontRemindSave);
+    const hasUnsavedChangesRef = useRef(hasUnsavedChanges);
     useEffect(() => {
-        const handleBeforeUnload = () => {
+        dontRemindSaveRef.current = dontRemindSave;
+    }, [dontRemindSave]);
+    useEffect(() => {
+        hasUnsavedChangesRef.current = hasUnsavedChanges;
+    }, [hasUnsavedChanges]);
+
+    useEffect(() => {
+        const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+            // Always try to save via beacon as backup
             if (elementsRef.current.length > 0) {
                 const convertedElements = elementsRef.current.map(el => ({
                     ...el,
@@ -330,6 +364,12 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     JSON.stringify({ elements: convertedElements })
                 );
             }
+
+            // Only warn if there are unsaved changes AND user hasn't opted out
+            if (hasUnsavedChangesRef.current && !dontRemindSaveRef.current && mode === 'builder') {
+                e.preventDefault();
+                return 'Save everything before you close.';
+            }
         };
 
         window.addEventListener('beforeunload', handleBeforeUnload);
@@ -339,12 +379,26 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 saveElements(elementsRef.current);
             }
         };
-    }, [storeId, saveElements]);
+    }, [storeId, saveElements, mode]);
 
-    // Trigger auto-save when elements change (but not during manual save)
+    // Trigger auto-save when elements change and track unsaved changes
     useEffect(() => {
-        if (mode === 'builder' && elements.length > 0 && !saving) {
-            autoSave();
+        if (mode === 'builder' && elements.length > 0) {
+            const currentState = JSON.stringify(elements.map(el => ({ id: el.id, x: el.x, y: el.y, width: el.width, height: el.height })));
+
+            // On initial load, just store the state
+            if (initialLoadRef.current) {
+                lastSavedStateRef.current = currentState;
+                initialLoadRef.current = false;
+            } else if (currentState !== lastSavedStateRef.current) {
+                // Mark as having unsaved changes if state differs from last saved
+                setHasUnsavedChanges(true);
+            }
+
+            // Trigger auto-save if not currently saving
+            if (!saving) {
+                autoSave();
+            }
         }
         return () => {
             if (autoSaveTimeoutRef.current) {
@@ -470,16 +524,29 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 return;
             }
             const data = await response.json();
-            if (data.store?.map_image_url) {
+            const hasMap = !!data.store?.map_image_url;
+            const hasElements = data.elements && data.elements.length > 0;
+
+            // Track if user has existing work
+            setHasExistingWork(hasMap || hasElements);
+
+            if (hasMap) {
                 setMapImageUrl(data.store.map_image_url);
+                setMode('builder'); // Go directly to builder if map exists
+            } else if (hasElements) {
+                // Has elements but no map image - still go to builder
+                setMapImageUrl(null);
+                setMapImage(null);
                 setMode('builder');
             } else {
+                // No existing work - show template choice
                 setMapImageUrl(null);
                 setMapImage(null);
                 setMode('choice');
             }
-            if (data.elements && data.elements.length > 0) {
-                setElements(data.elements.map((el: any) => {
+
+            if (hasElements) {
+                const loadedElements = data.elements.map((el: any) => {
                     // Parse metadata first - it contains all the element properties
                     const metadata = typeof el.metadata === 'string' ? JSON.parse(el.metadata) : (el.metadata || {});
 
@@ -518,7 +585,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                         labelOffsetY: metadata.labelOffsetY ?? el.labelOffsetY ?? -25,
                         metadata: metadata
                     };
-                }));
+                });
+                setElements(loadedElements);
             } else {
                 setElements([]);
             }
@@ -1905,7 +1973,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 const boxBottom = -element.height * 0.3;
                 const boxCenterY = (boxTop + boxBottom) / 2;
                 const labelColor = element.pinLabelColor || '#ffffff';
-                const labelFontWeight = element.pinLabelFontWeight || 'bold';
+                const labelFontWeight = element.pinLabelFontWeight || 'normal';
                 return (
                     <Group key={element.id} {...commonProps}>
                         {/* Pin shape - rounded rectangle with V anchor pointing down */}
@@ -1954,7 +2022,20 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
 
     if (mode === 'choice') {
         return (
-            <div className="flex flex-col items-center justify-center h-[600px] gap-8 bg-muted/20 rounded-lg border-2 border-dashed border-border">
+            <div className="relative flex flex-col items-center justify-center h-[600px] gap-8 bg-muted/20 rounded-lg border-2 border-dashed border-border">
+                {/* Back to Map button - only show if user has existing work */}
+                {hasExistingWork && (
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        className="absolute top-4 right-4"
+                        onClick={() => setMode('builder')}
+                    >
+                        <ArrowLeft className="h-4 w-4 mr-2" />
+                        Back to Map
+                    </Button>
+                )}
+
                 <div className="text-center space-y-2">
                     <h2 className="text-2xl font-bold">Create Store Map</h2>
                     <p className="text-muted-foreground">Choose how you want to create your store map</p>
@@ -2001,7 +2082,14 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             {/* Top Bar */}
             <div className="h-14 border-b border-border flex items-center justify-between px-4 bg-card">
                 <div className="flex items-center gap-2">
-                    <Button variant="ghost" size="sm" onClick={() => setMode('choice')}>
+                    <Button variant="ghost" size="sm" onClick={() => {
+                        // Only show warning if there are unsaved changes AND user hasn't opted out
+                        if (hasUnsavedChanges && !dontRemindSave) {
+                            setShowExitWarning(true);
+                        } else {
+                            setMode('choice');
+                        }
+                    }}>
                         <ArrowLeft className="h-4 w-4 mr-2" />
                         Back
                     </Button>
@@ -2023,10 +2111,17 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     <Button variant="outline" size="sm" onClick={handleResetZoom}>
                         {Math.round(scale * 100)}%
                     </Button>
-                    <Button 
-                        onClick={handleManualSave} 
-                        size="sm" 
-                        disabled={saving}
+                    {/* Auto-save indicator */}
+                    {autoSaving && (
+                        <div className="flex items-center gap-1.5 text-muted-foreground text-sm px-2">
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            <span>Auto-saving...</span>
+                        </div>
+                    )}
+                    <Button
+                        onClick={handleManualSave}
+                        size="sm"
+                        disabled={saving || autoSaving}
                     >
                         <Save className="h-4 w-4 mr-2" />
                         {saving ? 'Saving...' : 'Save'}
@@ -2522,6 +2617,62 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     </Tabs>
                 </div>
             </div>
+
+            {/* Exit Warning Dialog */}
+            <Dialog open={showExitWarning} onOpenChange={setShowExitWarning}>
+                <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2">
+                            <AlertTriangle className="h-5 w-5 text-amber-500" />
+                            Save Before Leaving
+                        </DialogTitle>
+                        <DialogDescription className="pt-2">
+                            Save everything before you close.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="flex items-start space-x-2 py-4">
+                        <Checkbox
+                            id="dont-remind"
+                            checked={dontRemindSave}
+                            onCheckedChange={(checked) => {
+                                const value = checked === true;
+                                setDontRemindSave(value);
+                                localStorage.setItem('mapEditor-dontRemindSave', value.toString());
+                            }}
+                        />
+                        <div className="grid gap-1.5 leading-none">
+                            <Label htmlFor="dont-remind" className="text-sm font-medium cursor-pointer">
+                                Don't remind me again
+                            </Label>
+                            <p className="text-xs text-muted-foreground">
+                                It is considered a best practice to keep reminding
+                                <br />
+                                you for saving your work.
+                            </p>
+                        </div>
+                    </div>
+                    <DialogFooter className="flex gap-2 sm:gap-0">
+                        <Button
+                            variant="outline"
+                            onClick={() => {
+                                setShowExitWarning(false);
+                                setMode('choice');
+                            }}
+                        >
+                            Leave Anyway
+                        </Button>
+                        <Button
+                            onClick={async () => {
+                                setShowExitWarning(false);
+                                await handleManualSave();
+                            }}
+                        >
+                            <Save className="h-4 w-4 mr-2" />
+                            Save & Stay
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </div>
     );
 };

@@ -107,7 +107,7 @@ export const defaultStaticPin: Partial<MapElement> = {
   pinLabel: 'Label',
   pinLabelFontSize: 14,
   pinLabelColor: '#ffffff',
-  pinLabelFontWeight: 'bold',
+  pinLabelFontWeight: 'normal',
 };
 
 // Default sizes for click-to-place elements
@@ -123,7 +123,7 @@ export const defaultSizes: Record<ElementType, { width: number; height: number }
   trapezoid: { width: 120, height: 80 },
   parallelogram: { width: 120, height: 80 },
   'smart-pin': { width: 40, height: 50 },
-  'static-pin': { width: 40, height: 50 },
+  'static-pin': { width: 55, height: 55 },
 };
 
 // Animation style labels for UI

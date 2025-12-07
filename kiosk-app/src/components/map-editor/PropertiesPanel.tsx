@@ -165,7 +165,7 @@ const PropertiesPanel = ({ element, onUpdateElement }: PropertiesPanelProps) => 
                     <div className="space-y-2">
                       <Label className="text-xs font-medium">Label Weight</Label>
                       <Select
-                        value={element.pinLabelFontWeight || 'bold'}
+                        value={element.pinLabelFontWeight || 'normal'}
                         onValueChange={(value: 'normal' | 'bold') => update({ pinLabelFontWeight: value })}
                       >
                         <SelectTrigger className="h-8 text-sm">

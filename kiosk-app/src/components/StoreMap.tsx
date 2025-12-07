@@ -135,7 +135,7 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
               pinLabel: metadata.pinLabel ?? '',
               pinLabelFontSize: metadata.pinLabelFontSize ?? 12,
               pinLabelColor: metadata.pinLabelColor ?? '#ffffff',
-              pinLabelFontWeight: metadata.pinLabelFontWeight ?? 'bold',
+              pinLabelFontWeight: metadata.pinLabelFontWeight ?? 'normal',
               showNameOn: metadata.showNameOn ?? 'layers',
             };
           }));
