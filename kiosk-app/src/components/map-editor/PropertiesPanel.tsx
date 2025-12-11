@@ -5,11 +5,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Textarea } from '@/components/ui/textarea';
-import type { MapElement, NameVisibility, AnimationStyle } from './types';
+import { Button } from '@/components/ui/button';
+import { ArrowUp, ArrowDown, ChevronUp, ChevronDown } from 'lucide-react';
+import type { MapElement, AnimationStyle } from './types';
 import { animationStyleLabels } from './types';
 
 interface PropertiesPanelProps {
   element: MapElement | null;
+  elements: MapElement[]; // Full list for z-index calculations
   onUpdateElement: (id: string, updates: Partial<MapElement>) => void;
 }
 
@@ -35,7 +38,7 @@ const sizeElements = ['rectangle', 'circle', 'polygon', 'triangle', 'trapezoid',
 // Pin elements
 const pinElements = ['smart-pin', 'static-pin'];
 
-const PropertiesPanel = ({ element, onUpdateElement }: PropertiesPanelProps) => {
+const PropertiesPanel = ({ element, elements, onUpdateElement }: PropertiesPanelProps) => {
   if (!element) {
     return (
       <div className="h-full bg-card border-l border-border p-4 overflow-hidden">
@@ -59,6 +62,7 @@ const PropertiesPanel = ({ element, onUpdateElement }: PropertiesPanelProps) => 
   const showSize = sizeElements.includes(element.type);
   const showPolygonSides = element.type === 'polygon';
   const showStroke = !isTextElement && !isPin; // All shapes except text and pins have stroke
+  const showLabelProperties = !isTextElement && !isPin && !lineElements.includes(element.type); // Shapes that can have labels
 
   return (
     <div className="h-full bg-card border-l border-border flex flex-col overflow-hidden">
@@ -69,68 +73,6 @@ const PropertiesPanel = ({ element, onUpdateElement }: PropertiesPanelProps) => 
 
       <ScrollArea className="flex-1">
         <div className="p-4 space-y-5">
-          {/* Name Section */}
-          <div className="space-y-2">
-            <Label className="text-xs font-medium">Name</Label>
-            <Input
-              value={element.name}
-              onChange={(e) => update({ name: e.target.value })}
-              className="h-8 text-sm"
-              placeholder="Element name"
-            />
-          </div>
-
-          {/* Name Visibility - Only for non-text elements */}
-          {!isTextElement && (
-            <div className="space-y-2">
-              <Label className="text-xs font-medium">Show Name</Label>
-              <Select
-                value={element.showNameOn || 'both'}
-                onValueChange={(value: NameVisibility) => update({ showNameOn: value })}
-              >
-                <SelectTrigger className="h-8 text-sm">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="both">Layers & Canvas</SelectItem>
-                  <SelectItem value="layers">Layers Only</SelectItem>
-                  <SelectItem value="canvas">Canvas Only</SelectItem>
-                  <SelectItem value="none">Hidden</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-
-          {/* Label Position - Only when name is shown on canvas */}
-          {!isTextElement && (element.showNameOn === 'canvas' || element.showNameOn === 'both' || !element.showNameOn) && (
-            <div className="space-y-2">
-              <Label className="text-xs font-medium">Label Position</Label>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <Label className="text-xs text-muted-foreground">Offset X</Label>
-                  <Input
-                    type="number"
-                    value={element.labelOffsetX ?? 0}
-                    onChange={(e) => update({ labelOffsetX: Number(e.target.value) })}
-                    className="h-8 text-sm"
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground">Offset Y</Label>
-                  <Input
-                    type="number"
-                    value={element.labelOffsetY ?? -25}
-                    onChange={(e) => update({ labelOffsetY: Number(e.target.value) })}
-                    className="h-8 text-sm"
-                  />
-                </div>
-              </div>
-              <p className="text-[10px] text-muted-foreground">Drag label on canvas or adjust here</p>
-            </div>
-          )}
-
-          <Separator />
-
           {/* Pin Properties */}
           {isPin && (
             <>
@@ -201,7 +143,7 @@ const PropertiesPanel = ({ element, onUpdateElement }: PropertiesPanelProps) => 
                 <div className="space-y-2">
                   <Label className="text-xs font-medium">Animation Style</Label>
                   <Select
-                    value={String(element.animationStyle || 1)}
+                    value={String(element.animationStyle ?? 0)}
                     onValueChange={(value) => update({ animationStyle: Number(value) as AnimationStyle })}
                   >
                     <SelectTrigger className="h-8 text-sm">
@@ -210,13 +152,13 @@ const PropertiesPanel = ({ element, onUpdateElement }: PropertiesPanelProps) => 
                     <SelectContent>
                       {(Object.entries(animationStyleLabels) as [string, string][]).map(([value, label]) => (
                         <SelectItem key={value} value={value}>
-                          {value}. {label}
+                          {label}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                   <p className="text-[10px] text-muted-foreground">
-                    Animation shown when pin is active on consumer map
+                    Select an animation to preview it. Animation plays when pin is active on consumer map.
                   </p>
                 </div>
 
@@ -245,6 +187,88 @@ const PropertiesPanel = ({ element, onUpdateElement }: PropertiesPanelProps) => 
                     </p>
                   </div>
                 )}
+              </div>
+
+              <Separator />
+            </>
+          )}
+
+          {/* Label Properties - For shapes that have labels */}
+          {showLabelProperties && (
+            <>
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label className="text-xs font-medium">Label</Label>
+                  <Input
+                    value={element.name || ''}
+                    onChange={(e) => update({ name: e.target.value })}
+                    className="h-8 text-sm"
+                    placeholder="Enter label..."
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-xs font-medium">Label Font Size: {element.labelFontSize || 28}px</Label>
+                  <Slider
+                    value={[element.labelFontSize || 28]}
+                    onValueChange={([value]) => update({ labelFontSize: value })}
+                    min={8}
+                    max={72}
+                    step={1}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-xs font-medium">Label Font</Label>
+                  <Select
+                    value={element.labelFontFamily || 'Arial'}
+                    onValueChange={(value) => update({ labelFontFamily: value })}
+                  >
+                    <SelectTrigger className="h-8 text-sm">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {fontFamilies.map((font) => (
+                        <SelectItem key={font} value={font} style={{ fontFamily: font }}>
+                          {font}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-xs font-medium">Label Weight</Label>
+                  <Select
+                    value={element.labelFontWeight || 'normal'}
+                    onValueChange={(value: 'normal' | 'bold') => update({ labelFontWeight: value })}
+                  >
+                    <SelectTrigger className="h-8 text-sm">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="normal">Normal</SelectItem>
+                      <SelectItem value="bold">Bold</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-xs font-medium">Label Color</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      type="color"
+                      value={element.labelColor || '#000000'}
+                      onChange={(e) => update({ labelColor: e.target.value })}
+                      className="w-10 h-8 p-1 cursor-pointer flex-shrink-0"
+                    />
+                    <Input
+                      value={element.labelColor || '#000000'}
+                      onChange={(e) => update({ labelColor: e.target.value })}
+                      className="flex-1 h-8 text-sm font-mono min-w-0"
+                    />
+                  </div>
+                </div>
               </div>
 
               <Separator />
@@ -414,6 +438,57 @@ const PropertiesPanel = ({ element, onUpdateElement }: PropertiesPanelProps) => 
               />
             </div>
           )}
+
+          {/* Layer Order Controls */}
+          <Separator />
+          <div className="space-y-2">
+            <Label className="text-xs font-medium">Layer Order</Label>
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => {
+                  const maxZ = elements.length > 0 ? Math.max(...elements.map(el => el.zIndex)) : 0;
+                  update({ zIndex: maxZ + 1 });
+                }}
+              >
+                <ArrowUp className="h-3 w-3 mr-1" />
+                To Front
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => {
+                  const minZ = elements.length > 0 ? Math.min(...elements.map(el => el.zIndex)) : 0;
+                  update({ zIndex: minZ - 1 });
+                }}
+              >
+                <ArrowDown className="h-3 w-3 mr-1" />
+                To Back
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => update({ zIndex: element.zIndex + 1 })}
+              >
+                <ChevronUp className="h-3 w-3 mr-1" />
+                Forward
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={() => update({ zIndex: element.zIndex - 1 })}
+              >
+                <ChevronDown className="h-3 w-3 mr-1" />
+                Backward
+              </Button>
+            </div>
+            <p className="text-[10px] text-muted-foreground">Current layer: {element.zIndex}</p>
+          </div>
 
           {/* Shape-specific: Corner Radius */}
           {showCornerRadius && (

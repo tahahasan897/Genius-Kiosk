@@ -1,21 +1,20 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Upload, Trash2, Hammer, ArrowLeft, ZoomIn, ZoomOut, Maximize, Grid, Save, Loader2, AlertTriangle } from 'lucide-react';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Label } from '@/components/ui/label';
+import { Upload, Trash2, Hammer, ArrowLeft, ArrowRight, ZoomIn, ZoomOut, Maximize, Grid, Eye, Send, Loader2, Monitor } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from 'sonner';
 import { Stage, Layer, Rect, Circle, Line, Arrow, Text as KonvaText, RegularPolygon, Transformer, Image as KonvaImage, Group } from 'react-konva';
+import Konva from 'konva';
 import useImage from 'use-image';
-import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import Sidebar from './map-editor/Sidebar';
 import LayersPanel from './map-editor/LayersPanel';
 import PropertiesPanel from './map-editor/PropertiesPanel';
 import LinksPanel from './map-editor/LinksPanel';
+import PreviewModal from './map-editor/PreviewModal';
+import ContextualToolbar from './map-editor/ContextualToolbar';
 import type { MapElement, Tool, ElementType } from './map-editor/types';
-import { defaultElement, defaultSizes, defaultSmartPin, defaultStaticPin, CANVAS_WIDTH, CANVAS_HEIGHT } from './map-editor/types';
+import { defaultElement, defaultSizes, defaultSmartPin, defaultStaticPin, CANVAS_WIDTH, CANVAS_HEIGHT, calculateFitToViewScale } from './map-editor/types';
 
 interface MapEditorProps {
     storeId: number;
@@ -33,18 +32,14 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     const [tool, setTool] = useState<Tool>('select');
     const [loading, setLoading] = useState(false);
     const [uploading, setUploading] = useState(false);
-    const [saving, setSaving] = useState(false);
     const [autoSaving, setAutoSaving] = useState(false);
-    const [showExitWarning, setShowExitWarning] = useState(false); // Exit warning dialog
-    const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false); // Track if changes made since last save
     const [hasExistingWork, setHasExistingWork] = useState(false); // Track if user has existing map/elements
-    const [dontRemindSave, setDontRemindSave] = useState(() => {
-        // Load preference from localStorage
-        return localStorage.getItem('mapEditor-dontRemindSave') === 'true';
-    });
+    const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false); // Track if there are unsaved changes
+    const [initialLoading, setInitialLoading] = useState(true); // Track initial data loading
     const [isDrawing, setIsDrawing] = useState(false);
     const [freehandPoints, setFreehandPoints] = useState<number[]>([]);
     const [showGrid, setShowGrid] = useState(true);
+    const [showCaptureArea, setShowCaptureArea] = useState(false); // Toggle capture area boundary visibility
     const [copiedElements, setCopiedElements] = useState<MapElement[]>([]);
     const [pasteCount, setPasteCount] = useState(0);
     const [isRightMouseDown, setIsRightMouseDown] = useState(false);
@@ -62,9 +57,10 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     const [history, setHistory] = useState<MapElement[][]>([[]]);
     const [historyStep, setHistoryStep] = useState(0);
 
-    // Zoom state
-    const [scale, setScale] = useState(1);
+    // Zoom state - default to 0.56 which represents "100%" visually (fits capture area)
+    const [scale, setScale] = useState(0.56);
     const [stagePosition, setStagePosition] = useState({ x: 0, y: 0 });
+    const [hasInitializedPosition, setHasInitializedPosition] = useState(false);
 
     // Inline naming state (replaces dialog)
     const [namingElementId, setNamingElementId] = useState<string | null>(null);
@@ -75,20 +71,43 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     const [editingTextId, setEditingTextId] = useState<string | null>(null);
     const [editingTextValue, setEditingTextValue] = useState('');
 
+    // Label editing state (for element labels - pin labels, shape labels, etc.)
+    const [editingLabelId, setEditingLabelId] = useState<string | null>(null);
+    const [editingLabelValue, setEditingLabelValue] = useState('');
+    const [editingLabelPosition, setEditingLabelPosition] = useState({ x: 0, y: 0 });
+
+    // Preview and Publish state
+    const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+    const [publishStatus, setPublishStatus] = useState<{
+        lastPublishedAt: string | null;
+        hasDraftChanges: boolean;
+        unpublishedElementCount: number;
+    } | null>(null);
+    const [isPublishing, setIsPublishing] = useState(false);
+    const [lastPublishedElements, setLastPublishedElements] = useState<string>(''); // Track last published state for local comparison
+
+    // Contextual toolbar position
+    const [toolbarPosition, setToolbarPosition] = useState<{ x: number; y: number } | null>(null);
+
+    // Animation preview state - tracks which pin to animate and trigger count
+    const [animationPreview, setAnimationPreview] = useState<{ pinId: string; style: number; trigger: number } | null>(null);
+
     const transformerRef = useRef<any>(null);
     const stageRef = useRef<any>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
-    const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const elementsRef = useRef(elements);
     const selectedElementIdsRef = useRef(selectedElementIds);
     const namingInputRef = useRef<HTMLInputElement>(null);
     const textEditInputRef = useRef<HTMLTextAreaElement>(null);
+    const labelEditInputRef = useRef<HTMLInputElement>(null);
     const canvasContainerRef = useRef<HTMLDivElement>(null);
     const isUndoRedoRef = useRef(false); // Track if we're in undo/redo
     const isShiftPressedRef = useRef(false); // Track Shift key for proportional resizing
     const dragStartPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map()); // Track drag start positions
+    const lineArrowDragOffsetRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 }); // Track drag offset for line/arrow anchors
     const initialLoadRef = useRef(true); // Track initial load to detect changes
-    const lastSavedStateRef = useRef<string>(''); // Track last saved state for change detection
+    const lastSavedStateRef = useRef<string | null>(null); // Track last saved state for comparison
+    const justFinishedEditingRef = useRef(false); // Prevent double-click right after dismissing prompt
 
     // Keep refs in sync with state
     useEffect(() => {
@@ -99,11 +118,110 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         selectedElementIdsRef.current = selectedElementIds;
     }, [selectedElementIds]);
 
+    // Update contextual toolbar position when selection changes
+    useEffect(() => {
+        if (selectedElementIds.length === 1) {
+            const element = elements.find(el => el.id === selectedElementIds[0]);
+            if (element) {
+                // Calculate center-top position of element
+                let x = element.x;
+                let y = element.y;
+
+                // For lines and arrows, calculate position from points array
+                if (element.type === 'line' || element.type === 'arrow') {
+                    const points = element.points || [0, 0, 100, 0];
+                    // Calculate center X of the line
+                    x = (points[0] + points[2]) / 2;
+                    // Use the topmost Y point
+                    y = Math.min(points[1], points[3]);
+                } else if (element.type === 'smart-pin') {
+                    // Smart pins extend above their Y position (teardrop shape)
+                    const pinSize = Math.max(element.width, element.height) * 1.2;
+                    const pinRadius = pinSize * 0.4;
+                    y = element.y - pinRadius - pinRadius * 0.2 - pinRadius; // Top of the pin circle
+                } else if (element.type === 'static-pin') {
+                    // Static pins extend above their Y position (cornered square badge)
+                    const staticPinHeight = (element.height || 55) * 0.7;
+                    const staticPointerHeight = (element.height || 55) * 0.3;
+                    y = element.y - staticPinHeight - staticPointerHeight; // Top of the rectangle
+                } else if (element.type !== 'circle' && element.type !== 'polygon' && element.type !== 'triangle') {
+                    // For most elements, use center-top position
+                    x = element.x + element.width / 2;
+                }
+
+                setToolbarPosition({ x, y });
+            }
+        } else {
+            setToolbarPosition(null);
+        }
+    }, [selectedElementIds, elements]);
+
+    // Animation preview effect - plays a demo animation when animation style is changed on a pin
+    useEffect(() => {
+        if (!animationPreview || !stageRef.current || animationPreview.style === 0) return;
+
+        const stage = stageRef.current;
+        const node = stage.findOne(`#${animationPreview.pinId}`);
+        if (!node) return;
+
+        // Get animation config based on style
+        const getAnimConfig = (style: number) => {
+            switch (style) {
+                case 1: // Pulse
+                    return { duration: 0.6, props: { scaleX: 1.15, scaleY: 1.15, opacity: 0.8 }, easing: Konva.Easings.EaseInOut };
+                case 2: // Bounce
+                    return { duration: 0.5, props: { y: node.y() - 10 }, easing: Konva.Easings.BounceEaseOut };
+                case 3: // Ripple
+                    return { duration: 1, props: { opacity: 0.5 }, easing: Konva.Easings.EaseOut };
+                case 4: // Flash
+                    return { duration: 0.3, props: { opacity: 0.3 }, easing: Konva.Easings.Linear };
+                case 5: // Glow
+                    return { duration: 0.8, props: { scaleX: 1.08, scaleY: 1.08 }, easing: Konva.Easings.EaseInOut };
+                default:
+                    return null;
+            }
+        };
+
+        const config = getAnimConfig(animationPreview.style);
+        if (!config) return;
+
+        // Store original values
+        const originalProps = {
+            scaleX: node.scaleX(),
+            scaleY: node.scaleY(),
+            opacity: node.opacity(),
+            y: node.y(),
+        };
+
+        // Create forward animation
+        const forwardTween = new Konva.Tween({
+            node,
+            duration: config.duration,
+            easing: config.easing,
+            ...config.props,
+            onFinish: () => {
+                // Create reverse animation back to original
+                const reverseTween = new Konva.Tween({
+                    node,
+                    duration: config.duration,
+                    easing: config.easing,
+                    scaleX: originalProps.scaleX,
+                    scaleY: originalProps.scaleY,
+                    opacity: originalProps.opacity,
+                    y: originalProps.y,
+                });
+                reverseTween.play();
+            },
+        });
+        forwardTween.play();
+    }, [animationPreview]);
+
     // Load map image
     const [loadedImage] = useImage(mapImageUrl ? `${API_URL}${mapImageUrl}` : '');
 
     useEffect(() => {
         loadMapData();
+        fetchPublishStatus();
     }, [storeId]);
 
     useEffect(() => {
@@ -111,6 +229,85 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             setMapImage(loadedImage);
         }
     }, [loadedImage]);
+
+    // Fetch publish status
+    const fetchPublishStatus = useCallback(async () => {
+        try {
+            const response = await fetch(`${API_URL}/api/admin/stores/${storeId}/map/status`);
+            if (response.ok) {
+                const data = await response.json();
+                setPublishStatus(data);
+            }
+        } catch (error) {
+            console.error('Error fetching publish status:', error);
+        }
+    }, [storeId]);
+
+    // Handle publish
+    const handlePublish = async () => {
+        setIsPublishing(true);
+        try {
+            const response = await fetch(
+                `${API_URL}/api/admin/stores/${storeId}/map/publish`,
+                { method: 'POST' }
+            );
+
+            if (response.ok) {
+                const data = await response.json();
+                toast.success(`Map published successfully! ${data.publishedCount} elements are now live.`);
+                // Store current state as the new published state for local comparison
+                const publishedState = JSON.stringify(elements.map(el => ({
+                    id: el.id, type: el.type, x: el.x, y: el.y, width: el.width, height: el.height,
+                    fillColor: el.fillColor, strokeColor: el.strokeColor, fillOpacity: el.fillOpacity,
+                    strokeWidth: el.strokeWidth, cornerRadius: el.cornerRadius,
+                    rotation: el.rotation, text: el.text, zIndex: el.zIndex, visible: el.visible,
+                    animationStyle: el.animationStyle, motionScale: el.motionScale, pinLabel: el.pinLabel,
+                    fontSize: el.fontSize, fontWeight: el.fontWeight
+                })));
+                setLastPublishedElements(publishedState);
+                fetchPublishStatus();
+            } else {
+                const error = await response.json();
+                toast.error(`Failed to publish: ${error.error}`);
+            }
+        } catch (error) {
+            toast.error('Failed to publish map. Please try again.');
+        } finally {
+            setIsPublishing(false);
+        }
+    };
+
+    // Mark that there are draft changes (optimistic update for UI)
+    const markDraftChanges = useCallback(() => {
+        setPublishStatus(prev => {
+            if (!prev) {
+                return {
+                    lastPublishedAt: null,
+                    hasDraftChanges: true,
+                    unpublishedElementCount: 1
+                };
+            }
+            return {
+                ...prev,
+                hasDraftChanges: true,
+                unpublishedElementCount: prev.unpublishedElementCount + 1
+            };
+        });
+    }, []);
+
+    // Check if there are local draft changes by comparing current elements to last published state
+    const hasLocalDraftChanges = useCallback(() => {
+        if (lastPublishedElements === '') return elements.length > 0; // No published state yet, any elements means changes
+        const currentState = JSON.stringify(elements.map(el => ({
+            id: el.id, type: el.type, x: el.x, y: el.y, width: el.width, height: el.height,
+            fillColor: el.fillColor, strokeColor: el.strokeColor, fillOpacity: el.fillOpacity,
+            strokeWidth: el.strokeWidth, cornerRadius: el.cornerRadius,
+            rotation: el.rotation, text: el.text, zIndex: el.zIndex, visible: el.visible,
+            animationStyle: el.animationStyle, motionScale: el.motionScale, pinLabel: el.pinLabel,
+            fontSize: el.fontSize, fontWeight: el.fontWeight
+        })));
+        return currentState !== lastPublishedElements;
+    }, [elements, lastPublishedElements]);
 
     // Load canvas state from localStorage when component mounts or storeId changes
     useEffect(() => {
@@ -141,6 +338,30 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         }
     }, [showGrid, scale, stagePosition, storeId]);
 
+    // Center the canvas on initial load (after container is rendered)
+    useEffect(() => {
+        if (!hasInitializedPosition && canvasContainerRef.current) {
+            const containerWidth = canvasContainerRef.current.offsetWidth;
+            const containerHeight = canvasContainerRef.current.offsetHeight;
+
+            // Only initialize if container has dimensions
+            if (containerWidth > 0 && containerHeight > 0) {
+                const scaledCanvasWidth = CANVAS_WIDTH * scale;
+                const scaledCanvasHeight = CANVAS_HEIGHT * scale;
+
+                const centerX = (containerWidth - scaledCanvasWidth) / 2;
+                const centerY = (containerHeight - scaledCanvasHeight) / 2;
+
+                // Only set position if it hasn't been loaded from localStorage
+                const saved = localStorage.getItem(`map-editor-canvas-state-${storeId}`);
+                if (!saved || !JSON.parse(saved).stagePosition) {
+                    setStagePosition({ x: centerX, y: centerY });
+                }
+                setHasInitializedPosition(true);
+            }
+        }
+    }, [hasInitializedPosition, scale, storeId]);
+
     // Focus naming input when it appears
     useEffect(() => {
         if (namingElementId && namingInputRef.current) {
@@ -160,6 +381,16 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             }, 50);
         }
     }, [editingTextId]);
+
+    // Focus label edit input when it appears
+    useEffect(() => {
+        if (editingLabelId && labelEditInputRef.current) {
+            setTimeout(() => {
+                labelEditInputRef.current?.focus();
+                labelEditInputRef.current?.select();
+            }, 50);
+        }
+    }, [editingLabelId]);
 
     // Track Shift key for proportional resizing
     useEffect(() => {
@@ -240,179 +471,170 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         }
     }, [storeId]);
 
-    // Manual save handler with loading state and feedback
-    const handleManualSave = useCallback(async () => {
-        if (saving) return; // Prevent multiple simultaneous saves
-        
-        // Cancel any pending auto-save
-        if (autoSaveTimeoutRef.current) {
-            clearTimeout(autoSaveTimeoutRef.current);
-            autoSaveTimeoutRef.current = null;
-        }
+    // Helper to convert element coordinates from canvas to percentage
+    const convertToPercentage = useCallback((element: MapElement) => ({
+        ...element,
+        x: (element.x / CANVAS_WIDTH) * 100,
+        y: (element.y / CANVAS_HEIGHT) * 100,
+        width: (element.width / CANVAS_WIDTH) * 100,
+        height: (element.height / CANVAS_HEIGHT) * 100,
+    }), []);
 
-        // Store currently selected element frontend IDs to restore selection after reload
-        const selectedFrontendIds = selectedElementIds.slice();
-
-        setSaving(true);
+    // Create a single element in the database (INSERT)
+    const createElementInDb = useCallback(async (element: MapElement): Promise<{ success: boolean; dbId?: number }> => {
         try {
-            // Clear transformer nodes before reload to prevent stale node references
-            if (transformerRef.current) {
-                transformerRef.current.nodes([]);
-            }
+            const convertedElement = convertToPercentage(element);
+            console.log(`[CREATE] Saving element ${element.id} to database...`);
 
-            const success = await saveElements(elements, true);
-            if (success) {
-                // Clear selection temporarily to prevent transformer from trying to use old nodes
-                setSelectedElementIds([]);
-                selectedElementIdsRef.current = [];
-                
-                // Save successful - reload map data to get updated database IDs
-                // This ensures frontend element IDs match backend IDs after save
-                await loadMapData();
-
-                // Restore selection by matching frontend IDs
-                // Wait for React to re-render the Konva stage with new elements before restoring selection
-                setTimeout(() => {
-                    const currentElements = elementsRef.current;
-                    const matchingIds: string[] = [];
-                    
-                    selectedFrontendIds.forEach(frontendId => {
-                        // Try to find element by current ID (might be the same if already database ID)
-                        const byCurrentId = currentElements.find(el => el.id === frontendId);
-                        if (byCurrentId) {
-                            matchingIds.push(byCurrentId.id);
-                            return;
-                        }
-                        
-                        // Try to find by frontendId stored in metadata
-                        const byMetadata = currentElements.find(el => {
-                            const metadata = el.metadata || {};
-                            return metadata.frontendId === frontendId || 
-                                   metadata.frontendId?.toString() === frontendId;
-                        });
-                        if (byMetadata) {
-                            matchingIds.push(byMetadata.id);
-                        }
-                    });
-                    
-                    if (matchingIds.length > 0) {
-                        setSelectedElementIds(matchingIds);
-                        selectedElementIdsRef.current = matchingIds;
-                    }
-                }, 300); // Increased timeout to ensure stage is fully re-rendered
-            }
-        } finally {
-            setSaving(false);
-        }
-    }, [elements, saving, saveElements, selectedElementIds]);
-
-    // Auto-save with debounce
-    const autoSave = useCallback(async () => {
-        // Don't auto-save if manual save is in progress
-        if (saving) {
-            if (autoSaveTimeoutRef.current) {
-                clearTimeout(autoSaveTimeoutRef.current);
-                autoSaveTimeoutRef.current = null;
-            }
-            return;
-        }
-
-        if (autoSaveTimeoutRef.current) {
-            clearTimeout(autoSaveTimeoutRef.current);
-        }
-
-        autoSaveTimeoutRef.current = setTimeout(async () => {
-            // Double-check saving state before actually saving
-            if (!saving) {
-                setAutoSaving(true);
-                const startTime = Date.now();
-                await saveElements(elementsRef.current, false); // Silent auto-save
-                // Ensure indicator shows for at least 500ms to avoid flickering
-                const elapsed = Date.now() - startTime;
-                if (elapsed < 500) {
-                    await new Promise(resolve => setTimeout(resolve, 500 - elapsed));
+            const response = await fetch(
+                `${API_URL}/api/admin/stores/${storeId}/map/element`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ element: convertedElement })
                 }
+            );
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+                console.error('[CREATE] Failed:', errorData.error);
+                return { success: false };
+            }
+
+            const result = await response.json();
+            console.log(`[CREATE] Success! Element ${element.id} -> DB ID ${result.elementId}`);
+            markDraftChanges(); // Update publish status
+            return { success: true, dbId: result.elementId };
+        } catch (error: any) {
+            console.error('[CREATE] Error:', error);
+            return { success: false };
+        }
+    }, [storeId, convertToPercentage, markDraftChanges]);
+
+    // Update a single element in the database (UPDATE)
+    const updateElementInDb = useCallback(async (element: MapElement): Promise<boolean> => {
+        try {
+            // Only update elements that have database IDs (numeric IDs)
+            const dbId = parseInt(element.id);
+            if (isNaN(dbId)) {
+                console.log(`[UPDATE] Skipping element ${element.id} - not in database yet`);
+                return false;
+            }
+
+            const convertedElement = convertToPercentage(element);
+            console.log(`[UPDATE] Updating element ${element.id} in database...`);
+
+            const response = await fetch(
+                `${API_URL}/api/admin/stores/${storeId}/map/element/${dbId}`,
+                {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ element: convertedElement })
+                }
+            );
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+                console.error('[UPDATE] Failed:', errorData.error);
+                return false;
+            }
+
+            console.log(`[UPDATE] Success! Element ${element.id} updated`);
+            markDraftChanges(); // Update publish status
+            return true;
+        } catch (error: any) {
+            console.error('[UPDATE] Error:', error);
+            return false;
+        }
+    }, [storeId, convertToPercentage, markDraftChanges]);
+
+    // Delete a single element from the database (DELETE)
+    const deleteElementFromDb = useCallback(async (elementId: string): Promise<boolean> => {
+        try {
+            // Only delete elements that have database IDs (numeric IDs)
+            const dbId = parseInt(elementId);
+            if (isNaN(dbId)) {
+                console.log(`[DELETE] Skipping element ${elementId} - not in database`);
+                return true; // Not an error, just wasn't persisted yet
+            }
+
+            console.log(`[DELETE] Deleting element ${elementId} from database...`);
+
+            const response = await fetch(
+                `${API_URL}/api/admin/stores/${storeId}/map/element/${dbId}`,
+                {
+                    method: 'DELETE',
+                }
+            );
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+                console.error('[DELETE] Failed:', errorData.error);
+                return false;
+            }
+
+            console.log(`[DELETE] Success! Element ${elementId} deleted`);
+            markDraftChanges(); // Update publish status
+            return true;
+        } catch (error: any) {
+            console.error('[DELETE] Error:', error);
+            return false;
+        }
+    }, [storeId, markDraftChanges]);
+
+    // Debounced update for element changes (position, size, properties)
+    const pendingUpdatesRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
+    const pendingUpdateCountRef = useRef(0);
+
+    const debouncedUpdateElement = useCallback((element: MapElement) => {
+        // Clear any pending update for this element
+        const existingTimeout = pendingUpdatesRef.current.get(element.id);
+        if (existingTimeout) {
+            clearTimeout(existingTimeout);
+        } else {
+            // New pending update
+            pendingUpdateCountRef.current++;
+            if (pendingUpdateCountRef.current === 1) {
+                setAutoSaving(true);
+            }
+        }
+
+        // Schedule new update with 300ms debounce
+        const timeout = setTimeout(async () => {
+            pendingUpdatesRef.current.delete(element.id);
+            await updateElementInDb(element);
+            pendingUpdateCountRef.current--;
+            if (pendingUpdateCountRef.current === 0) {
                 setAutoSaving(false);
             }
-        }, 1500); // Increased debounce to 1.5 seconds
-    }, [saveElements, saving]);
+        }, 300);
 
-    // Save on window close/navigation and warn user
-    const dontRemindSaveRef = useRef(dontRemindSave);
-    const hasUnsavedChangesRef = useRef(hasUnsavedChanges);
+        pendingUpdatesRef.current.set(element.id, timeout);
+    }, [updateElementInDb]);
+
+
+    // Flush any pending element updates on unmount
     useEffect(() => {
-        dontRemindSaveRef.current = dontRemindSave;
-    }, [dontRemindSave]);
-    useEffect(() => {
-        hasUnsavedChangesRef.current = hasUnsavedChanges;
-    }, [hasUnsavedChanges]);
-
-    useEffect(() => {
-        const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-            // Always try to save via beacon as backup
-            if (elementsRef.current.length > 0) {
-                const convertedElements = elementsRef.current.map(el => ({
-                    ...el,
-                    x: (el.x / CANVAS_WIDTH) * 100,
-                    y: (el.y / CANVAS_HEIGHT) * 100,
-                    width: (el.width / CANVAS_WIDTH) * 100,
-                    height: (el.height / CANVAS_HEIGHT) * 100,
-                }));
-
-                navigator.sendBeacon(
-                    `${API_URL}/api/admin/stores/${storeId}/map/elements`,
-                    JSON.stringify({ elements: convertedElements })
-                );
-            }
-
-            // Only warn if there are unsaved changes AND user hasn't opted out
-            if (hasUnsavedChangesRef.current && !dontRemindSaveRef.current && mode === 'builder') {
-                e.preventDefault();
-                return 'Save everything before you close.';
-            }
-        };
-
-        window.addEventListener('beforeunload', handleBeforeUnload);
         return () => {
-            window.removeEventListener('beforeunload', handleBeforeUnload);
-            if (elementsRef.current.length > 0) {
-                saveElements(elementsRef.current);
-            }
+            // Clear all pending updates on unmount (they will have already saved)
+            pendingUpdatesRef.current.forEach(timeout => clearTimeout(timeout));
+            pendingUpdatesRef.current.clear();
         };
-    }, [storeId, saveElements, mode]);
+    }, []);
 
-    // Trigger auto-save when elements change and track unsaved changes
+    // Track initial load state (no longer needed for auto-save, kept for reference)
     useEffect(() => {
-        if (mode === 'builder' && elements.length > 0) {
-            const currentState = JSON.stringify(elements.map(el => ({ id: el.id, x: el.x, y: el.y, width: el.width, height: el.height })));
-
-            // On initial load, just store the state
-            if (initialLoadRef.current) {
-                lastSavedStateRef.current = currentState;
-                initialLoadRef.current = false;
-            } else if (currentState !== lastSavedStateRef.current) {
-                // Mark as having unsaved changes if state differs from last saved
-                setHasUnsavedChanges(true);
-            }
-
-            // Trigger auto-save if not currently saving
-            if (!saving) {
-                autoSave();
-            }
+        if (mode === 'builder' && elements.length > 0 && initialLoadRef.current) {
+            initialLoadRef.current = false;
         }
-        return () => {
-            if (autoSaveTimeoutRef.current) {
-                clearTimeout(autoSaveTimeoutRef.current);
-            }
-        };
-    }, [elements, mode, autoSave, saving]);
+    }, [elements, mode]);
 
     // Update transformer
     useEffect(() => {
         if (!transformerRef.current) return;
 
         // Clear transformer if no selection or during editing
-        if (selectedElementIds.length === 0 || namingElementId || editingTextId) {
+        if (selectedElementIds.length === 0 || namingElementId || editingTextId || editingLabelId) {
             transformerRef.current.nodes([]);
             transformerRef.current.getLayer().batchDraw();
             return;
@@ -482,9 +704,28 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     }, []);
 
     const handleResetZoom = useCallback(() => {
-        setScale(1);
-        setStagePosition({ x: 0, y: 0 });
-        // State will be saved automatically via the useEffect that watches scale and stagePosition
+        const defaultScale = 0.56; // This is "100%" - fits the capture area perfectly
+        setScale(defaultScale);
+
+        // Center the canvas in the container
+        if (canvasContainerRef.current) {
+            const containerWidth = canvasContainerRef.current.offsetWidth;
+            const containerHeight = canvasContainerRef.current.offsetHeight;
+            const scaledCanvasWidth = CANVAS_WIDTH * defaultScale;
+            const scaledCanvasHeight = CANVAS_HEIGHT * defaultScale;
+
+            const centerX = (containerWidth - scaledCanvasWidth) / 2;
+            const centerY = (containerHeight - scaledCanvasHeight) / 2;
+
+            setStagePosition({ x: centerX, y: centerY });
+        } else {
+            setStagePosition({ x: 0, y: 0 });
+        }
+    }, []);
+
+    // Toggle capture area visibility
+    const handleToggleCaptureArea = useCallback(() => {
+        setShowCaptureArea(prev => !prev);
     }, []);
 
     // Mouse wheel zoom
@@ -514,6 +755,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     };
 
     const loadMapData = async () => {
+        setInitialLoading(true);
         try {
             const response = await fetch(`${API_URL}/api/admin/stores/${storeId}/map`);
             if (!response.ok) {
@@ -521,6 +763,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 setMapImage(null);
                 setElements([]);
                 setMode('choice');
+                setInitialLoading(false);
                 return;
             }
             const data = await response.json();
@@ -580,22 +823,35 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                         sides: metadata.sides ?? el.sides ?? 6,
                         // Preserve showNameOn from metadata if it exists, otherwise use saved value or default
                         // Check metadata first, then top-level, then fallback to what was originally saved
-                        showNameOn: metadata.showNameOn !== undefined ? metadata.showNameOn : (el.showNameOn !== undefined ? el.showNameOn : 'layers'),
+                        showNameOn: metadata.showNameOn !== undefined ? metadata.showNameOn : (el.showNameOn !== undefined ? el.showNameOn : 'both'),
                         labelOffsetX: metadata.labelOffsetX ?? el.labelOffsetX ?? 0,
-                        labelOffsetY: metadata.labelOffsetY ?? el.labelOffsetY ?? -25,
+                        labelOffsetY: metadata.labelOffsetY ?? el.labelOffsetY ?? 0,
                         metadata: metadata
                     };
                 });
                 setElements(loadedElements);
+                // Store initial published state for local draft comparison
+                const publishedState = JSON.stringify(loadedElements.map((el: MapElement) => ({
+                    id: el.id, type: el.type, x: el.x, y: el.y, width: el.width, height: el.height,
+                    fillColor: el.fillColor, strokeColor: el.strokeColor, fillOpacity: el.fillOpacity,
+                    strokeWidth: el.strokeWidth, cornerRadius: el.cornerRadius,
+                    rotation: el.rotation, text: el.text, zIndex: el.zIndex, visible: el.visible,
+                    animationStyle: el.animationStyle, motionScale: el.motionScale, pinLabel: el.pinLabel,
+                    fontSize: el.fontSize, fontWeight: el.fontWeight
+                })));
+                setLastPublishedElements(publishedState);
             } else {
                 setElements([]);
+                setLastPublishedElements('');
             }
+            setInitialLoading(false);
         } catch (error) {
             console.error('Error loading map:', error);
             setMapImageUrl(null);
             setMapImage(null);
             setElements([]);
             setMode('choice');
+            setInitialLoading(false);
         }
     };
 
@@ -654,14 +910,45 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         if (element.type === 'circle' || element.type === 'polygon' || element.type === 'triangle') {
             centerX = element.x;
             centerY = element.y;
+        } else if ((element.type === 'line' || element.type === 'arrow') && element.points && element.points.length >= 4) {
+            // For line/arrow elements, calculate center from actual points
+            // Points array: [x1, y1, x2, y2]
+            const x1 = element.points[0];
+            const y1 = element.points[1];
+            const x2 = element.points[2];
+            const y2 = element.points[3];
+            centerX = (x1 + x2) / 2;
+            centerY = (y1 + y2) / 2;
+        } else if (element.type === 'static-pin') {
+            // Static pin's anchor (element.x, element.y) is at the tip of the pointer (bottom)
+            // The rectangle body is drawn above it, centered horizontally
+            const staticPinHeight = (element.height || 55) * 0.7;
+            const staticPointerHeight = (element.height || 55) * 0.3;
+            centerX = element.x; // Already horizontally centered
+            centerY = element.y - staticPointerHeight - (staticPinHeight / 2); // Center of the rectangle
+        } else if (element.type === 'smart-pin') {
+            // Smart pin's anchor (element.x, element.y) is at the tip of the teardrop (bottom)
+            // The circle is drawn above it
+            const pinSize = Math.max(element.width, element.height) * 1.2;
+            const pinRadius = pinSize * 0.4;
+            centerX = element.x; // Already horizontally centered
+            centerY = element.y - pinRadius - pinRadius * 0.2 - pinRadius; // Center of the circle
         } else {
             centerX = element.x + element.width / 2;
             centerY = element.y + element.height / 2;
         }
 
-        // Apply zoom and position
-        const screenX = centerX * scale + stagePosition.x + container.scrollLeft;
-        const screenY = centerY * scale + stagePosition.y + container.scrollTop;
+        // Apply zoom and position, and clamp to container bounds
+        let screenX = centerX * scale + stagePosition.x + container.scrollLeft;
+        let screenY = centerY * scale + stagePosition.y + container.scrollTop;
+
+        // Clamp to ensure the prompt stays within the visible container area
+        const padding = 120; // Account for the prompt box size
+        const containerWidth = container.offsetWidth;
+        const containerHeight = container.offsetHeight;
+
+        screenX = Math.max(padding, Math.min(screenX, containerWidth - padding));
+        screenY = Math.max(padding, Math.min(screenY, containerHeight - padding));
 
         return { x: screenX, y: screenY };
     };
@@ -669,7 +956,6 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     const createElement = (type: ElementType, x: number, y: number) => {
         const id = Date.now().toString();
         const size = defaultSizes[type] || { width: 100, height: 100 };
-        const elementName = getDefaultName(type);
 
         let newElement: MapElement | null = null;
 
@@ -678,9 +964,9 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 newElement = {
                     id,
                     type: 'rectangle',
-                    name: elementName,
-                    x,
-                    y,
+                    name: '', // Start with empty name - user types it via prompt
+                    x: x - size.width / 2,  // Center at click position
+                    y: y - size.height / 2, // Center at click position
                     width: size.width,
                     height: size.height,
                     ...defaultElement,
@@ -690,7 +976,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 newElement = {
                     id,
                     type: 'circle',
-                    name: elementName,
+                    name: '',
                     x, // Center X
                     y, // Center Y
                     width: size.width,
@@ -702,7 +988,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 newElement = {
                     id,
                     type: 'triangle',
-                    name: elementName,
+                    name: '',
                     x,
                     y,
                     width: size.width,
@@ -715,9 +1001,9 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 newElement = {
                     id,
                     type: 'trapezoid',
-                    name: elementName,
-                    x,
-                    y,
+                    name: '',
+                    x: x - size.width / 2,  // Center at click position
+                    y: y - size.height / 2, // Center at click position
                     width: size.width,
                     height: size.height,
                     ...defaultElement,
@@ -727,9 +1013,9 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 newElement = {
                     id,
                     type: 'parallelogram',
-                    name: elementName,
-                    x,
-                    y,
+                    name: '',
+                    x: x - size.width / 2,  // Center at click position
+                    y: y - size.height / 2, // Center at click position
                     width: size.width,
                     height: size.height,
                     ...defaultElement,
@@ -739,33 +1025,35 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 newElement = {
                     id,
                     type: 'line',
-                    name: elementName,
+                    name: '',
                     x: 0,
                     y: 0,
                     width: 0,
                     height: 0,
                     points: [x - 50, y, x + 50, y],
                     ...defaultElement,
+                    strokeWidth: 6, // Override default for lines
                 } as MapElement;
                 break;
             case 'arrow':
                 newElement = {
                     id,
                     type: 'arrow',
-                    name: elementName,
+                    name: '',
                     x: 0,
                     y: 0,
                     width: 0,
                     height: 0,
                     points: [x - 50, y, x + 50, y],
                     ...defaultElement,
+                    strokeWidth: 6, // Override default for arrows
                 } as MapElement;
                 break;
             case 'polygon':
                 newElement = {
                     id,
                     type: 'polygon',
-                    name: elementName,
+                    name: '',
                     x,
                     y,
                     width: size.width,
@@ -778,7 +1066,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 newElement = {
                     id,
                     type: 'text',
-                    name: elementName,
+                    name: '',
                     x: x - 100,
                     y: y - 20,
                     width: 200,
@@ -788,24 +1076,34 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 } as MapElement;
                 break;
             case 'smart-pin':
+                // Calculate offset to center pin visually on the click position
+                // The pin's anchor is at the bottom tip, but we want the visual center (the circle) at the click position
+                const smartPinSize = Math.max(size.width, size.height) * 1.2;
+                const smartPinRadius = smartPinSize * 0.4;
+                const smartPinVisualCenterOffset = smartPinRadius + smartPinRadius * 0.2 + smartPinRadius; // Distance from anchor to circle center
                 newElement = {
                     id,
                     type: 'smart-pin',
-                    name: elementName,
+                    name: '',
                     x: x, // Anchor point (bottom of pin V)
-                    y: y, // Anchor point (bottom of pin V)
+                    y: y + smartPinVisualCenterOffset, // Offset anchor so visual center is at click position
                     width: size.width,
                     height: size.height,
                     ...defaultSmartPin,
                 } as MapElement;
                 break;
             case 'static-pin':
+                // Calculate offset to center pin visually on the click position
+                // The pin's anchor is at the bottom tip, but we want the visual center (the rectangle) at the click position
+                const staticPinHeight = (size.height || 55) * 0.7;
+                const staticPointerHeight = (size.height || 55) * 0.3;
+                const staticPinVisualCenterOffset = staticPointerHeight + staticPinHeight / 2; // Distance from anchor to rectangle center
                 newElement = {
                     id,
                     type: 'static-pin',
-                    name: elementName,
+                    name: '',
                     x: x, // Anchor point (bottom of pin V)
-                    y: y, // Anchor point (bottom of pin V)
+                    y: y + staticPinVisualCenterOffset, // Offset anchor so visual center is at click position
                     width: size.width,
                     height: size.height,
                     ...defaultStaticPin,
@@ -815,54 +1113,108 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
 
         if (newElement) {
             newElement.zIndex = elements.length;
-            // Default to showing name only in layers for shapes, so they are clean on canvas
+            // Default to showing name on both canvas and layers panel
             if (newElement.type !== 'text') {
-                newElement.showNameOn = 'layers';
+                newElement.showNameOn = 'both';
             }
 
+            const tempId = newElement.id;
+
+            // Add element to state immediately for responsive UI
             setElements(prev => [...prev, newElement!]);
             setSelectedElementIds([newElement.id]);
 
-            // Auto-start editing ONLY for text elements
+            // Auto-start label editing for elements (excluding smart-pin, line, arrow)
             if (newElement.type === 'text') {
+                // For text elements, edit text directly
                 const center = getElementCenter(newElement);
-                setNamingPosition(center);
+                setEditingLabelPosition(center);
                 setEditingTextValue(newElement.text || '');
                 setEditingTextId(newElement.id);
+            } else if (newElement.type === 'static-pin') {
+                // For static pins, edit pinLabel
+                const center = getElementCenter(newElement);
+                setEditingLabelPosition(center);
+                setEditingLabelValue('');
+                setEditingLabelId(newElement.id);
+            } else if (newElement.type !== 'smart-pin' && newElement.type !== 'line' && newElement.type !== 'arrow' && newElement.type !== 'freehand') {
+                // For other shapes, edit text label
+                const center = getElementCenter(newElement);
+                setEditingLabelPosition(center);
+                setEditingLabelValue('');
+                setEditingLabelId(newElement.id);
             }
 
             // Auto-switch to select mode
             setTool('select');
 
-            // For smart-pin and static-pin, trigger immediate save and reload
-            // to ensure they get database IDs for product linking
-            if (newElement.type === 'smart-pin' || newElement.type === 'static-pin') {
-                const pinId = newElement.id;
-                // Cancel pending auto-save to avoid conflicts
-                if (autoSaveTimeoutRef.current) {
-                    clearTimeout(autoSaveTimeoutRef.current);
-                    autoSaveTimeoutRef.current = null;
+            // Immediately save to database and update element ID
+            (async () => {
+                const result = await createElementInDb(newElement);
+                if (result.success && result.dbId) {
+                    const newDbId = result.dbId!.toString();
+                    // Update the element's ID to the database ID
+                    setElements(prev => prev.map(el =>
+                        el.id === tempId
+                            ? { ...el, id: newDbId, metadata: { ...el.metadata, frontendId: tempId } }
+                            : el
+                    ));
+                    // Update selection to use new ID
+                    setSelectedElementIds(prev => prev.map(id =>
+                        id === tempId ? newDbId : id
+                    ));
+                    // Update editingLabelId if it was set to the temp ID
+                    setEditingLabelId(prev => prev === tempId ? newDbId : prev);
+                    // Update editingTextId if it was set to the temp ID
+                    setEditingTextId(prev => prev === tempId ? newDbId : prev);
                 }
-                // Use timeout to ensure state is updated first, then save and reload
-                setTimeout(async () => {
-                    const success = await saveElements(elementsRef.current, false);
-                    if (success) {
-                        await loadMapData();
-                        // Restore selection to the new pin by finding it via frontendId in metadata
-                        setTimeout(() => {
-                            const currentElements = elementsRef.current;
-                            const savedPin = currentElements.find(el => {
-                                const metadata = el.metadata || {};
-                                return metadata.frontendId === pinId || metadata.frontendId?.toString() === pinId;
-                            });
-                            if (savedPin) {
-                                setSelectedElementIds([savedPin.id]);
-                            }
-                        }, 100);
-                    }
-                }, 50);
-            }
+            })();
         }
+    };
+
+    // Helper function to calculate canvas coordinates from a Konva event
+    // Uses the Layer's getRelativePointerPosition which handles all transforms correctly
+    const getCanvasPositionFromKonvaEvent = (e: any): { x: number; y: number } | null => {
+        const stage = e.target.getStage();
+        if (!stage) return null;
+
+        // Get the first layer and use its getRelativePointerPosition
+        // This properly accounts for stage position and scale transforms
+        const layer = stage.getLayers()[0];
+        if (layer) {
+            const pos = layer.getRelativePointerPosition();
+            if (pos) return pos;
+        }
+
+        // Fallback: use stage's getRelativePointerPosition
+        return stage.getRelativePointerPosition();
+    };
+
+    // Helper for non-Konva events (like React DragEvent)
+    // Manually calculates canvas coordinates to handle React synthetic events correctly
+    const getCanvasPositionFromDragEvent = (e: React.DragEvent): { x: number; y: number } | null => {
+        const stage = stageRef.current;
+        if (!stage) return null;
+
+        // Get the stage's content element (the Konva container)
+        const stageContent = stage.content;
+        if (!stageContent) return null;
+
+        // Get the bounding rect of the stage's content element
+        const rect = stageContent.getBoundingClientRect();
+
+        // Calculate position relative to the stage's content element
+        // Use nativeEvent to ensure we get accurate coordinates
+        const nativeEvent = e.nativeEvent;
+        const pointerX = nativeEvent.clientX - rect.left;
+        const pointerY = nativeEvent.clientY - rect.top;
+
+        // Apply inverse transforms to get canvas coordinates
+        // Formula: canvasPos = (pointerPos - stagePosition) / scale
+        const canvasX = (pointerX - stagePosition.x) / scale;
+        const canvasY = (pointerY - stagePosition.y) / scale;
+
+        return { x: canvasX, y: canvasY };
     };
 
     const handleDrop = (e: React.DragEvent) => {
@@ -870,19 +1222,10 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         const toolType = e.dataTransfer.getData('toolType') as ElementType;
         if (!toolType) return;
 
-        const stage = stageRef.current;
-        if (!stage) return;
-
-        stage.setPointersPositions(e);
-        const pos = stage.getPointerPosition();
+        const pos = getCanvasPositionFromDragEvent(e);
         if (!pos) return;
 
-        const adjustedPos = {
-            x: (pos.x - stagePosition.x) / scale,
-            y: (pos.y - stagePosition.y) / scale,
-        };
-
-        createElement(toolType, adjustedPos.x, adjustedPos.y);
+        createElement(toolType, pos.x, pos.y);
     };
 
     const handleDragOver = (e: React.DragEvent) => {
@@ -903,6 +1246,12 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             return;
         }
 
+        // If we're editing a label, finish editing first
+        if (editingLabelId) {
+            finishLabelEdit(true);
+            return;
+        }
+
         if (tool === 'select') {
             if (e.target === e.target.getStage()) {
                 setSelectedElementIds([]);
@@ -913,50 +1262,38 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         // Don't create elements during freehand drawing
         if (tool === 'freehand' && isDrawing) return;
 
-        const stage = e.target.getStage();
-        const pos = stage.getPointerPosition();
+        // Use Layer's getRelativePointerPosition for accurate canvas coordinates
+        const pos = getCanvasPositionFromKonvaEvent(e);
         if (!pos) return;
-
-        // Adjust for zoom
-        const adjustedPos = {
-            x: (pos.x - stagePosition.x) / scale,
-            y: (pos.y - stagePosition.y) / scale,
-        };
 
         // For freehand, start drawing
         if (tool === 'freehand') {
             setIsDrawing(true);
-            setFreehandPoints([adjustedPos.x, adjustedPos.y]);
+            setFreehandPoints([pos.x, pos.y]);
             return;
         }
 
         // For other tools, create element
-        createElement(tool as ElementType, adjustedPos.x, adjustedPos.y);
+        createElement(tool as ElementType, pos.x, pos.y);
     };
 
     const handleStageMouseMove = (e: any) => {
         if (!isDrawing || tool !== 'freehand') return;
 
-        const stage = e.target.getStage();
-        const pos = stage.getPointerPosition();
+        // Use Layer's getRelativePointerPosition for accurate canvas coordinates
+        const pos = getCanvasPositionFromKonvaEvent(e);
         if (!pos) return;
 
-        // Adjust for zoom
-        const adjustedPos = {
-            x: (pos.x - stagePosition.x) / scale,
-            y: (pos.y - stagePosition.y) / scale,
-        };
-
-        setFreehandPoints(prev => [...prev, adjustedPos.x, adjustedPos.y]);
+        setFreehandPoints(prev => [...prev, pos.x, pos.y]);
     };
 
     const handleStageMouseUp = () => {
         if (!isDrawing || tool !== 'freehand') return;
 
         if (freehandPoints.length > 4) {
-            const id = Date.now().toString();
+            const tempId = Date.now().toString();
             const newElement: MapElement = {
-                id,
+                id: tempId,
                 type: 'freehand',
                 name: 'Freehand',
                 x: 0,
@@ -965,12 +1302,29 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 height: 0,
                 freehandPoints: [...freehandPoints],
                 zIndex: elements.length,
-                showNameOn: 'layers', // Default to layers only
+                showNameOn: 'both', // Default to both canvas and layers
                 ...defaultElement,
             } as MapElement;
 
             setElements([...elements, newElement]);
             setSelectedElementIds([newElement.id]);
+
+            // Immediately save to database
+            (async () => {
+                const result = await createElementInDb(newElement);
+                if (result.success && result.dbId) {
+                    // Update the element's ID to the database ID
+                    setElements(prev => prev.map(el =>
+                        el.id === tempId
+                            ? { ...el, id: result.dbId!.toString(), metadata: { ...el.metadata, frontendId: tempId } }
+                            : el
+                    ));
+                    // Update selection to use new ID
+                    setSelectedElementIds(prev => prev.map(id =>
+                        id === tempId ? result.dbId!.toString() : id
+                    ));
+                }
+            })();
 
             // Don't auto-switch to select mode - let user manually choose when to switch tools
         }
@@ -1016,27 +1370,81 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             }
             setEditingTextId(null);
             setEditingTextValue('');
+
+            // Set flag to prevent double-click from re-triggering prompt
+            // Flag clears after 500ms cooldown
+            justFinishedEditingRef.current = true;
+            setTimeout(() => {
+                justFinishedEditingRef.current = false;
+            }, 500);
         }
     };
 
-    // Double-click to rename or edit text
-    const handleElementDoubleClick = (elementId: string) => {
-        const element = elements.find(el => el.id === elementId);
-        if (element) {
-            if (element.type === 'text') {
-                // For text elements, open text editing
-                const center = getElementCenter(element);
-                setNamingPosition(center);
-                setEditingTextValue(element.text || '');
-                setEditingTextId(elementId);
-            } else {
-                // For other elements, open rename
-                const center = getElementCenter(element);
-                setNamingPosition(center);
-                setNamingValue(element.name);
-                setNamingElementId(elementId);
+    // Finish label editing
+    const finishLabelEdit = (save: boolean) => {
+        if (editingLabelId) {
+            if (save && editingLabelValue.trim()) {
+                // Update the element's name (pinLabel for static pins, name for other elements)
+                const element = elements.find(el => el.id === editingLabelId);
+                if (element) {
+                    if (element.type === 'static-pin') {
+                        updateElement(editingLabelId, { pinLabel: editingLabelValue.trim() });
+                    } else {
+                        // For other shapes, update the name property so it shows in layers panel
+                        updateElement(editingLabelId, { name: editingLabelValue.trim() });
+                    }
+                }
             }
+            setEditingLabelId(null);
+            setEditingLabelValue('');
+
+            // Set flag to prevent double-click from re-triggering prompt
+            // Flag clears after 500ms cooldown
+            justFinishedEditingRef.current = true;
+            setTimeout(() => {
+                justFinishedEditingRef.current = false;
+            }, 500);
         }
+    };
+
+    // Double-click to edit element label (not layer name)
+    const handleElementDoubleClick = (elementId: string) => {
+        // Skip if we just finished editing (prevents accidental re-trigger)
+        if (justFinishedEditingRef.current) {
+            return;
+        }
+
+        const element = elements.find(el => el.id === elementId);
+        if (!element) return;
+
+        // Skip label editing for smart-pin, line, and arrow
+        if (element.type === 'smart-pin' || element.type === 'line' || element.type === 'arrow') {
+            return;
+        }
+
+        // For text elements, edit the text directly
+        if (element.type === 'text') {
+            const center = getElementCenter(element);
+            setEditingLabelPosition(center);
+            setEditingTextValue(element.text || '');
+            setEditingTextId(elementId);
+            return;
+        }
+
+        // For static pins, edit pinLabel
+        if (element.type === 'static-pin') {
+            const center = getElementCenter(element);
+            setEditingLabelPosition(center);
+            setEditingLabelValue(element.pinLabel || '');
+            setEditingLabelId(elementId);
+            return;
+        }
+
+        // For other elements (rectangle, circle, etc.), edit the name
+        const center = getElementCenter(element);
+        setEditingLabelPosition(center);
+        setEditingLabelValue(element.name || '');
+        setEditingLabelId(elementId);
     };
 
     // Save current state to history (for undo/redo)
@@ -1054,31 +1462,117 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         }
     };
 
+    // Sync database with a new element state (for undo/redo)
+    // Compares current elements with target elements and performs necessary DB operations
+    const syncDatabaseWithState = useCallback(async (currentElements: MapElement[], targetElements: MapElement[]) => {
+        const currentIds = new Set(currentElements.map(el => el.id));
+        const targetIds = new Set(targetElements.map(el => el.id));
+
+        // Elements to delete (in current but not in target)
+        const toDelete = currentElements.filter(el => !targetIds.has(el.id));
+
+        // Elements to create (in target but not in current)
+        const toCreate = targetElements.filter(el => !currentIds.has(el.id));
+
+        // Elements to update (in both, check if changed)
+        const toUpdate = targetElements.filter(el => {
+            if (!currentIds.has(el.id)) return false;
+            const currentEl = currentElements.find(c => c.id === el.id);
+            if (!currentEl) return false;
+            // Simple deep comparison via JSON
+            return JSON.stringify(el) !== JSON.stringify(currentEl);
+        });
+
+        // Perform deletions
+        for (const el of toDelete) {
+            await deleteElementFromDb(el.id);
+        }
+
+        // Perform creations
+        for (const el of toCreate) {
+            // Only create if it has a numeric ID (was previously in DB)
+            // Non-numeric IDs mean it was never saved, so we need to create it
+            const dbId = parseInt(el.id);
+            if (isNaN(dbId)) {
+                // Element was never saved to DB, create it now
+                const result = await createElementInDb(el);
+                if (result.success && result.dbId) {
+                    // Update the element's ID in the target state
+                    el.id = result.dbId.toString();
+                    el.metadata = { ...el.metadata, frontendId: el.id };
+                }
+            }
+            // If it has a numeric ID, it means it was deleted and we're restoring it
+            // We need to re-create it in the database
+            else {
+                const result = await createElementInDb(el);
+                if (result.success && result.dbId) {
+                    // The element gets a new DB ID
+                    el.id = result.dbId.toString();
+                    el.metadata = { ...el.metadata, frontendId: el.id };
+                }
+            }
+        }
+
+        // Perform updates
+        for (const el of toUpdate) {
+            await updateElementInDb(el);
+        }
+
+        return targetElements;
+    }, [deleteElementFromDb, createElementInDb, updateElementInDb]);
+
     // Undo
-    const handleUndo = useCallback(() => {
+    const handleUndo = useCallback(async () => {
         if (historyStep > 0) {
             isUndoRedoRef.current = true;
+            const currentElements = elementsRef.current;
+            const targetElements = JSON.parse(JSON.stringify(history[historyStep - 1]));
+
             setHistoryStep(historyStep - 1);
-            setElements(JSON.parse(JSON.stringify(history[historyStep - 1])));
             setSelectedElementIds([]);
+
+            // Sync database with the target state
+            setAutoSaving(true);
+            const syncedElements = await syncDatabaseWithState(currentElements, targetElements);
+            setElements(syncedElements);
+            elementsRef.current = syncedElements;
+            setAutoSaving(false);
+
+            // Refresh publish status to reflect current draft state
+            fetchPublishStatus();
+
             toast.success('Undone');
         } else {
             toast.error('Nothing to undo');
         }
-    }, [historyStep, history]);
+    }, [historyStep, history, syncDatabaseWithState, fetchPublishStatus]);
 
     // Redo
-    const handleRedo = useCallback(() => {
+    const handleRedo = useCallback(async () => {
         if (historyStep < history.length - 1) {
             isUndoRedoRef.current = true;
+            const currentElements = elementsRef.current;
+            const targetElements = JSON.parse(JSON.stringify(history[historyStep + 1]));
+
             setHistoryStep(historyStep + 1);
-            setElements(JSON.parse(JSON.stringify(history[historyStep + 1])));
             setSelectedElementIds([]);
+
+            // Sync database with the target state
+            setAutoSaving(true);
+            const syncedElements = await syncDatabaseWithState(currentElements, targetElements);
+            setElements(syncedElements);
+            elementsRef.current = syncedElements;
+            setAutoSaving(false);
+
+            // Refresh publish status to reflect current draft state
+            fetchPublishStatus();
+
             toast.success('Redone');
         } else {
             toast.error('Nothing to redo');
         }
-    }, [historyStep, history]);
+    }, [historyStep, history, syncDatabaseWithState, fetchPublishStatus]);
 
     // Cut (copy + delete)
     const handleCut = useCallback(() => {
@@ -1091,9 +1585,12 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 // Note: saveToHistory is handled by the useEffect that tracks element changes
                 setSelectedElementIds([]);
                 toast.success(`Cut ${elementsToCut.length} element${elementsToCut.length > 1 ? 's' : ''}`);
+
+                // Delete from database
+                elementsToCut.forEach(el => deleteElementFromDb(el.id));
             }
         }
-    }, [selectedElementIds, elements]);
+    }, [selectedElementIds, elements, deleteElementFromDb]);
 
     // Select All
     const handleSelectAll = useCallback(() => {
@@ -1103,10 +1600,14 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     }, [elements]);
 
     const handleDeleteElement = useCallback((id: string) => {
+        // Remove from state immediately for responsive UI
         setElements(prev => prev.filter(el => el.id !== id));
         setSelectedElementIds(prev => prev.filter(sid => sid !== id));
         toast.success('Element deleted');
-    }, []);
+
+        // Delete from database
+        deleteElementFromDb(id);
+    }, [deleteElementFromDb]);
 
     // Deep clone a single element
     const deepCloneElement = useCallback((el: MapElement): MapElement => {
@@ -1203,7 +1704,36 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         setSelectedElementIds(newSelectedIds);
 
         toast.success(`Pasted ${newPastedElements.length} element${newPastedElements.length > 1 ? 's' : ''}`);
-    }, [copiedElements, elements, pasteCount, deepCloneElement]);
+
+        // Immediately save all pasted elements to database
+        (async () => {
+            const idMappings: { tempId: string; dbId: number }[] = [];
+
+            for (const element of newPastedElements) {
+                const result = await createElementInDb(element);
+                if (result.success && result.dbId) {
+                    idMappings.push({ tempId: element.id, dbId: result.dbId });
+                }
+            }
+
+            // Update element IDs to database IDs
+            if (idMappings.length > 0) {
+                setElements(prev => prev.map(el => {
+                    const mapping = idMappings.find(m => m.tempId === el.id);
+                    if (mapping) {
+                        return { ...el, id: mapping.dbId.toString(), metadata: { ...el.metadata, frontendId: mapping.tempId } };
+                    }
+                    return el;
+                }));
+
+                // Update selection to use new IDs
+                setSelectedElementIds(prev => prev.map(id => {
+                    const mapping = idMappings.find(m => m.tempId === id);
+                    return mapping ? mapping.dbId.toString() : id;
+                }));
+            }
+        })();
+    }, [copiedElements, elements, pasteCount, deepCloneElement, createElementInDb]);
 
     // Keyboard shortcuts - must be after handler definitions to avoid hoisting issues
     useEffect(() => {
@@ -1218,11 +1748,18 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     if (editingTextId) {
                         finishTextEdit(false);
                     }
+                    if (editingLabelId) {
+                        finishLabelEdit(false);
+                    }
                 }
                 if (e.key === 'Enter' && !e.shiftKey) {
                     if (namingElementId) {
                         e.preventDefault();
                         finishNaming(true);
+                    }
+                    if (editingLabelId) {
+                        e.preventDefault();
+                        finishLabelEdit(true);
                     }
                 }
                 return;
@@ -1280,7 +1817,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     break;
                 case 'delete':
                 case 'backspace':
-                    if (selectedElementIds.length > 0 && !editingTextId && !namingElementId) {
+                    if (selectedElementIds.length > 0 && !editingTextId && !namingElementId && !editingLabelId) {
                         // Delete all selected elements
                         selectedElementIds.forEach(id => handleDeleteElement(id));
                     }
@@ -1289,6 +1826,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     setSelectedElementIds([]);
                     setEditingTextId(null);
                     setNamingElementId(null);
+                    setEditingLabelId(null);
                     setTool('select');
                     break;
                 case '=':
@@ -1319,6 +1857,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         selectedElementIds,
         editingTextId,
         namingElementId,
+        editingLabelId,
         handleUndo,
         handleRedo,
         handleCopy,
@@ -1353,11 +1892,33 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     };
 
     const updateElement = (id: string, updates: Partial<MapElement>) => {
+        // Check if this is an animation style change for a pin - trigger preview
+        if (updates.animationStyle !== undefined) {
+            const element = elementsRef.current.find(el => el.id === id);
+            if (element && (element.type === 'smart-pin' || element.type === 'static-pin')) {
+                // Only preview if animation is not 0 (Set animation)
+                if (updates.animationStyle !== 0) {
+                    setAnimationPreview(prev => ({
+                        pinId: id,
+                        style: updates.animationStyle as number,
+                        trigger: (prev?.trigger || 0) + 1
+                    }));
+                }
+            }
+        }
+
         // Use callback form to avoid stale state issues
         setElements(prev => {
             const newElements = prev.map(el => el.id === id ? { ...el, ...updates } : el);
             // Update ref immediately so subsequent operations have latest data
             elementsRef.current = newElements;
+
+            // Trigger debounced database update for the changed element
+            const updatedElement = newElements.find(el => el.id === id);
+            if (updatedElement) {
+                debouncedUpdateElement(updatedElement);
+            }
+
             return newElements;
         });
     };
@@ -1371,6 +1932,15 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             });
             // Update ref immediately so subsequent operations have latest data
             elementsRef.current = newElements;
+
+            // Trigger debounced database update for each changed element
+            updates.forEach((_, id) => {
+                const updatedElement = newElements.find(el => el.id === id);
+                if (updatedElement) {
+                    debouncedUpdateElement(updatedElement);
+                }
+            });
+
             return newElements;
         });
     };
@@ -1385,6 +1955,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
 
     const handleReorderElements = (newElements: MapElement[]) => {
         setElements(newElements);
+        // Trigger debounced updates for all reordered elements (zIndex may have changed)
+        newElements.forEach(el => debouncedUpdateElement(el));
     };
 
     const selectedElement = selectedElementIds.length === 1 ? elements.find(el => el.id === selectedElementIds[0]) || null : null;
@@ -1411,47 +1983,11 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         ];
     };
 
-    // Get proportional pin points for smart-pin and static-pin
-    // The pin has a square top and a V-shaped bottom anchor
-    // Coordinates use negative Y (upward from anchor point at 0,0)
-    const getPinPoints = (width: number, height: number): number[] => {
-        // Calculate proportional values based on pin size
-        // Base proportions from default 40x50: cornerRadius=5, offsets: 10, 15
-        const cornerRadius = width * 0.125; // 5/40 = 12.5% of width
-        const topEdgeOffset = height * 0.2; // 10/50 = 20% of height
-        const topCornerOffset = height * 0.3; // 15/50 = 30% of height
-        const bottomSquareY = height * 0.3; // 15/50 = 30% of height from bottom
-        const vStartY = height * 0.2; // 10/50 = 20% of height from bottom
-        const vWidth = width * 0.125; // 5/40 = 12.5% of width from center
-        
-        // Pin structure: square top with rounded corners, vertical sides, V-shaped bottom
-        // Y coordinates are negative (upward from anchor point)
-        return [
-            // Top-left rounded corner start
-            -width / 2 + cornerRadius, -height + topEdgeOffset,
-            // Top-right rounded corner start
-            width / 2 - cornerRadius, -height + topEdgeOffset,
-            // Top-right corner point (outer corner)
-            width / 2, -height + topCornerOffset,
-            // Right side - goes down to bottom of square
-            width / 2, -bottomSquareY,
-            // Right side - transition to V (inner corner)
-            width / 2 - cornerRadius, -vStartY,
-            // V tip (right side)
-            vWidth, -vStartY,
-            // V point (bottom center at 0, 0)
-            0, 0,
-            // V tip (left side)
-            -vWidth, -vStartY,
-            // Left side - transition from V (inner corner)
-            -width / 2 + cornerRadius, -vStartY,
-            // Left side - goes up to bottom of square
-            -width / 2, -bottomSquareY,
-            // Top-left corner point (outer corner)
-            -width / 2, -height + topCornerOffset,
-            // Close path back to start
-            -width / 2 + cornerRadius, -height + topEdgeOffset,
-        ];
+    // Teardrop pin helper - calculates size and radius for teardrop shape
+    const getTeardropPinSize = (element: MapElement) => {
+        const size = Math.max(element.width, element.height) * 1.2;
+        const radius = size * 0.4;
+        return { size, radius };
     };
 
     // Render element
@@ -1539,6 +2075,52 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     }
                 }
             },
+            onDragMove: (e: any) => {
+                // Update toolbar position in real-time during drag
+                const node = e.target;
+                const currentEl = elementsRef.current.find(el => el.id === element.id);
+                if (!currentEl) return;
+
+                let toolbarX: number, toolbarY: number;
+
+                if (currentEl.type === 'line' || currentEl.type === 'arrow') {
+                    // For lines/arrows, calculate center from points + current drag offset
+                    const points = currentEl.points || [0, 0, 100, 0];
+                    const dragOffsetX = node.x();
+                    const dragOffsetY = node.y();
+                    toolbarX = (points[0] + points[2]) / 2 + dragOffsetX;
+                    toolbarY = Math.min(points[1], points[3]) + dragOffsetY;
+                    // Update drag offset ref so anchor circles can follow
+                    lineArrowDragOffsetRef.current = { x: dragOffsetX, y: dragOffsetY };
+                } else if (currentEl.type === 'freehand') {
+                    // For freehand, use current node position
+                    const points = currentEl.freehandPoints || [];
+                    const dragOffsetX = node.x();
+                    const dragOffsetY = node.y();
+                    const minY = points.length > 1 ? Math.min(...points.filter((_, i) => i % 2 === 1)) : currentEl.y;
+                    const avgX = points.length > 1 ? points.filter((_, i) => i % 2 === 0).reduce((a, b) => a + b, 0) / (points.length / 2) : currentEl.x;
+                    toolbarX = avgX + dragOffsetX;
+                    toolbarY = minY + dragOffsetY;
+                } else if (currentEl.type === 'smart-pin') {
+                    // For smart pins, calculate toolbar position at top of pin during drag
+                    const pinSize = Math.max(currentEl.width, currentEl.height) * 1.2;
+                    const pinRadius = pinSize * 0.4;
+                    toolbarX = node.x();
+                    toolbarY = node.y() - pinRadius - pinRadius * 0.2 - pinRadius;
+                } else if (currentEl.type === 'static-pin') {
+                    // For static pins, calculate toolbar position at top of pin during drag
+                    const staticPinHeight = (currentEl.height || 55) * 0.7;
+                    const staticPointerHeight = (currentEl.height || 55) * 0.3;
+                    toolbarX = node.x();
+                    toolbarY = node.y() - staticPinHeight - staticPointerHeight;
+                } else {
+                    // For regular shapes, use node's current position
+                    toolbarX = node.x() + currentEl.width / 2;
+                    toolbarY = node.y();
+                }
+
+                setToolbarPosition({ x: toolbarX, y: toolbarY });
+            },
             onDragEnd: (e: any) => {
                 // Use refs to get latest values (avoid stale closure)
                 const currentSelectedIds = selectedElementIdsRef.current;
@@ -1559,6 +2141,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     // When dragged, e.target.x()/y() gives us the delta directly
                     deltaX = e.target.x();
                     deltaY = e.target.y();
+                    // Reset drag offset ref since drag is complete
+                    lineArrowDragOffsetRef.current = { x: 0, y: 0 };
                 } else if (currentElement.type === 'freehand') {
                     // For freehand, same as lines - Group starts at (0,0)
                     deltaX = e.target.x();
@@ -1703,9 +2287,11 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             onDblClick: () => handleElementDoubleClick(element.id),
         };
 
-        // Render name label if enabled
+        // Render name label if enabled - centered on the element
         const renderLabel = () => {
+            // Don't show label if: no name, hidden, layers-only, or currently being edited
             if (!element.name || element.showNameOn === 'none' || element.showNameOn === 'layers') return null;
+            if (editingLabelId === element.id) return null; // Hide while editing
 
             let x = 0;
             let y = 0;
@@ -1718,14 +2304,10 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 x = -element.width / 2;
                 y = -element.height / 2;
             } else {
-                // For top-left shapes (rect), the group origin is top-left
+                // For top-left shapes (rect, etc.), the group origin is top-left
                 x = 0;
                 y = 0;
             }
-
-            // Apply custom offsets if any
-            x += (element.labelOffsetX || 0);
-            y += (element.labelOffsetY || 0);
 
             return (
                 <KonvaText
@@ -1734,10 +2316,10 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     y={y}
                     width={width}
                     height={height}
-                    fontSize={element.fontSize || 14} // Use element font size or default
-                    fontFamily={element.fontFamily}
-                    fontStyle={element.fontWeight}
-                    fill={element.type === 'text' ? element.fillColor : '#000000'} // Use fill color for text tool, black for labels
+                    fontSize={element.labelFontSize || 28}
+                    fontFamily={element.labelFontFamily || 'Arial'}
+                    fontStyle={element.labelFontWeight || 'normal'}
+                    fill={element.labelColor || '#000000'}
                     align="center"
                     verticalAlign="middle"
                     listening={false} // Let clicks pass through to the shape
@@ -1920,17 +2502,28 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     </Group>
                 );
             case 'smart-pin':
-                const smartPinPoints = getPinPoints(element.width, element.height);
-                // Calculate proportional inner rectangle dimensions
-                const innerRectWidth = element.width * 0.5; // 50% of pin width
-                const innerRectHeight = element.height * 0.35; // 35% of pin height
-                const innerRectY = -element.height + element.height * 0.25; // Position in upper part
-                const innerRectRadius = Math.min(innerRectWidth, innerRectHeight) * 0.15; // Proportional corner radius
+                const { size: smartSize, radius: smartRadius } = getTeardropPinSize(element);
+                const smartCircleY = -smartRadius - smartRadius * 0.2;
+                const smartInnerRadius = smartRadius * 0.45;
                 return (
                     <Group key={element.id} {...commonProps}>
-                        {/* Pin shape - rounded rectangle with V anchor pointing down */}
+                        {/* Teardrop outer circle */}
+                        <Circle
+                            x={0}
+                            y={smartCircleY}
+                            radius={smartRadius}
+                            fill={element.fillColor}
+                            opacity={element.fillOpacity}
+                            stroke={element.strokeColor}
+                            strokeWidth={element.strokeWidth}
+                        />
+                        {/* Bottom triangle point */}
                         <Line
-                            points={smartPinPoints}
+                            points={[
+                                -smartRadius * 0.7, smartCircleY + smartRadius * 0.5,
+                                smartRadius * 0.7, smartCircleY + smartRadius * 0.5,
+                                0, smartSize * 0.35,
+                            ]}
                             closed={true}
                             fill={element.fillColor}
                             opacity={element.fillOpacity}
@@ -1938,25 +2531,33 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             strokeWidth={element.strokeWidth}
                             lineJoin="round"
                         />
-                        {/* Inner centered rounded rectangle - distinguishes smart pins */}
-                        <Rect
-                            x={-innerRectWidth / 2}
-                            y={innerRectY}
-                            width={innerRectWidth}
-                            height={innerRectHeight}
+                        {/* Cover stroke between circle and triangle */}
+                        <Line
+                            points={[
+                                -smartRadius * 0.65, smartCircleY + smartRadius * 0.5,
+                                smartRadius * 0.65, smartCircleY + smartRadius * 0.5,
+                            ]}
+                            stroke={element.fillColor}
+                            strokeWidth={4}
+                            opacity={element.fillOpacity}
+                            listening={false}
+                        />
+                        {/* Inner white circle (hollow center) */}
+                        <Circle
+                            x={0}
+                            y={smartCircleY}
+                            radius={smartInnerRadius}
                             fill="#ffffff"
-                            opacity={0.9}
-                            cornerRadius={innerRectRadius}
                             listening={false}
                         />
                         {/* Selection highlight */}
                         {isSelected && (
-                            <Line
-                                points={smartPinPoints}
-                                closed={true}
+                            <Circle
+                                x={0}
+                                y={smartCircleY}
+                                radius={smartRadius + 2}
                                 stroke="#3b82f6"
                                 strokeWidth={3}
-                                lineJoin="round"
                                 listening={false}
                             />
                         )}
@@ -1964,21 +2565,36 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     </Group>
                 );
             case 'static-pin':
-                const staticPinPoints = getPinPoints(element.width, element.height);
-                // Use custom font size from properties, or fall back to default
+                // Cornered square badge design with pointer at bottom
+                const staticPinWidth = element.width || 55;
+                const staticPinHeight = (element.height || 55) * 0.7; // Rectangle body height
+                const staticPointerHeight = (element.height || 55) * 0.3; // Pointer triangle height
+                const staticCornerRadius = 6;
                 const labelFontSize = element.pinLabelFontSize || 12;
-                // The rectangular box spans from y=-0.8*height (top) to y=-0.3*height (bottom)
-                // Center of the box is at y = -0.55*height
-                const boxTop = -element.height * 0.8;
-                const boxBottom = -element.height * 0.3;
-                const boxCenterY = (boxTop + boxBottom) / 2;
                 const labelColor = element.pinLabelColor || '#ffffff';
-                const labelFontWeight = element.pinLabelFontWeight || 'normal';
+                const labelFontWeight = element.pinLabelFontWeight || 'bold';
+
                 return (
                     <Group key={element.id} {...commonProps}>
-                        {/* Pin shape - rounded rectangle with V anchor pointing down */}
+                        {/* Rectangle body with rounded corners */}
+                        <Rect
+                            x={-staticPinWidth / 2}
+                            y={-staticPinHeight - staticPointerHeight}
+                            width={staticPinWidth}
+                            height={staticPinHeight}
+                            fill={element.fillColor}
+                            opacity={element.fillOpacity}
+                            stroke={element.strokeColor}
+                            strokeWidth={element.strokeWidth}
+                            cornerRadius={staticCornerRadius}
+                        />
+                        {/* Triangular pointer at bottom */}
                         <Line
-                            points={staticPinPoints}
+                            points={[
+                                -staticPinWidth * 0.2, -staticPointerHeight,
+                                staticPinWidth * 0.2, -staticPointerHeight,
+                                0, 0,
+                            ]}
                             closed={true}
                             fill={element.fillColor}
                             opacity={element.fillOpacity}
@@ -1986,29 +2602,40 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             strokeWidth={element.strokeWidth}
                             lineJoin="round"
                         />
-                        {/* Pin label - centered in the rectangular box portion */}
+                        {/* Cover the stroke line between rectangle and pointer */}
+                        <Line
+                            points={[
+                                -staticPinWidth * 0.18, -staticPointerHeight,
+                                staticPinWidth * 0.18, -staticPointerHeight,
+                            ]}
+                            stroke={element.fillColor}
+                            strokeWidth={element.strokeWidth + 2}
+                            opacity={element.fillOpacity}
+                            listening={false}
+                        />
+                        {/* Pin label inside rectangle */}
                         <KonvaText
-                            text={element.pinLabel || 'Click to edit'}
-                            x={-element.width / 2 + 2}
-                            y={boxCenterY - labelFontSize / 2}
-                            width={element.width - 4}
+                            text={element.pinLabel || ''}
+                            x={-staticPinWidth / 2}
+                            y={-staticPinHeight - staticPointerHeight + (staticPinHeight - labelFontSize) / 2}
+                            width={staticPinWidth}
                             fontSize={labelFontSize}
-                            fontFamily="Verdana, sans-serif"
-                            fontStyle={element.pinLabel ? labelFontWeight : 'normal'}
-                            fill={element.pinLabel ? labelColor : 'rgba(255,255,255,0.6)'}
+                            fontFamily="Arial, sans-serif"
+                            fontStyle={labelFontWeight}
+                            fill={labelColor}
                             align="center"
-                            wrap="word"
-                            ellipsis={true}
                             listening={false}
                         />
                         {/* Selection highlight */}
                         {isSelected && (
-                            <Line
-                                points={staticPinPoints}
-                                closed={true}
+                            <Rect
+                                x={-staticPinWidth / 2 - 2}
+                                y={-staticPinHeight - staticPointerHeight - 2}
+                                width={staticPinWidth + 4}
+                                height={staticPinHeight + 4}
                                 stroke="#3b82f6"
                                 strokeWidth={3}
-                                lineJoin="round"
+                                cornerRadius={staticCornerRadius}
                                 listening={false}
                             />
                         )}
@@ -2019,6 +2646,16 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 return null;
         }
     };
+
+    // Show loading spinner during initial data load
+    if (initialLoading) {
+        return (
+            <div className="flex flex-col items-center justify-center h-[600px] gap-4 bg-muted/20 rounded-lg border-2 border-dashed border-border">
+                <Loader2 className="h-12 w-12 animate-spin text-primary" />
+                <p className="text-muted-foreground">Loading store map...</p>
+            </div>
+        );
+    }
 
     if (mode === 'choice') {
         return (
@@ -2031,8 +2668,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                         className="absolute top-4 right-4"
                         onClick={() => setMode('builder')}
                     >
-                        <ArrowLeft className="h-4 w-4 mr-2" />
                         Back to Map
+                        <ArrowRight className="h-4 w-4 ml-2" />
                     </Button>
                 )}
 
@@ -2083,12 +2720,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             <div className="h-14 border-b border-border flex items-center justify-between px-4 bg-card">
                 <div className="flex items-center gap-2">
                     <Button variant="ghost" size="sm" onClick={() => {
-                        // Only show warning if there are unsaved changes AND user hasn't opted out
-                        if (hasUnsavedChanges && !dontRemindSave) {
-                            setShowExitWarning(true);
-                        } else {
-                            setMode('choice');
-                        }
+                        // Changes are auto-saved, so just go back
+                        setMode('choice');
                     }}>
                         <ArrowLeft className="h-4 w-4 mr-2" />
                         Back
@@ -2098,7 +2731,12 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 </div>
 
                 <div className="flex items-center gap-2">
-                    <Button variant="outline" size="sm" onClick={() => setShowGrid(!showGrid)}>
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setShowGrid(!showGrid)}
+                        title="Toggle grid lines for alignment"
+                    >
                         <Grid className="h-4 w-4 mr-2" />
                         {showGrid ? 'Hide Grid' : 'Show Grid'}
                     </Button>
@@ -2109,22 +2747,34 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                         </Button>
                     )}
                     <Button variant="outline" size="sm" onClick={handleResetZoom}>
-                        {Math.round(scale * 100)}%
+                        {Math.round((scale / 0.56) * 100)}%
                     </Button>
                     {/* Auto-save indicator */}
                     {autoSaving && (
                         <div className="flex items-center gap-1.5 text-muted-foreground text-sm px-2">
                             <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            <span>Auto-saving...</span>
+                            <span>Saving...</span>
                         </div>
                     )}
                     <Button
-                        onClick={handleManualSave}
+                        variant="outline"
                         size="sm"
-                        disabled={saving || autoSaving}
+                        onClick={() => setIsPreviewOpen(true)}
                     >
-                        <Save className="h-4 w-4 mr-2" />
-                        {saving ? 'Saving...' : 'Save'}
+                        <Eye className="h-4 w-4 mr-2" />
+                        Preview
+                    </Button>
+                    <Button
+                        size="sm"
+                        onClick={handlePublish}
+                        disabled={isPublishing || !hasLocalDraftChanges()}
+                    >
+                        {isPublishing ? (
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        ) : (
+                            <Send className="h-4 w-4 mr-2" />
+                        )}
+                        {isPublishing ? 'Publishing...' : 'Publish'}
                     </Button>
                 </div>
             </div>
@@ -2147,16 +2797,46 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 >
                     {/* Floating Zoom Controls */}
                     <div className="absolute bottom-4 left-4 z-10 flex flex-col gap-2 bg-card border border-border rounded-lg shadow-sm p-1">
-                        <Button variant="ghost" size="icon" onClick={handleZoomIn}>
+                        <Button variant="ghost" size="icon" onClick={handleZoomIn} title="Zoom In">
                             <ZoomIn className="h-4 w-4" />
                         </Button>
-                        <Button variant="ghost" size="icon" onClick={handleZoomOut}>
+                        <Button variant="ghost" size="icon" onClick={handleZoomOut} title="Zoom Out">
                             <ZoomOut className="h-4 w-4" />
                         </Button>
-                        <Button variant="ghost" size="icon" onClick={handleResetZoom}>
+                        <Button variant="ghost" size="icon" onClick={handleResetZoom} title="Reset Zoom to 100%">
                             <Maximize className="h-4 w-4" />
                         </Button>
+                        <Button
+                            variant={showCaptureArea ? "default" : "ghost"}
+                            size="icon"
+                            onClick={handleToggleCaptureArea}
+                            title={showCaptureArea ? "Hide Capture Area" : "Show Capture Area"}
+                        >
+                            <Monitor className="h-4 w-4" />
+                        </Button>
                     </div>
+
+                    {/* Capture Area Info - only show when capture area is visible */}
+                    {showCaptureArea && (
+                        <div className="absolute bottom-4 left-20 z-10 bg-card/90 border border-border rounded-md px-2.5 py-1.5 text-xs shadow-sm">
+                            <div className="flex items-center gap-1.5">
+                                <div className="w-2.5 h-2.5 border-2 border-blue-500 rounded-sm" />
+                                <span className="text-muted-foreground">Capture Area:</span>
+                                <span className="font-medium">{CANVAS_WIDTH} × {CANVAS_HEIGHT}px</span>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Contextual Toolbar - appears above selected element */}
+                    <ContextualToolbar
+                        element={selectedElement}
+                        position={toolbarPosition}
+                        scale={scale}
+                        stagePosition={stagePosition}
+                        canvasContainerRef={canvasContainerRef}
+                        onUpdateElement={updateElement}
+                        onDeleteElement={handleDeleteElement}
+                    />
 
                     <Stage
                         width={CANVAS_WIDTH}
@@ -2188,18 +2868,14 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                     // Clear any existing selection when starting a new selection box
                                     setSelectedElementIds([]);
 
-                                    // Start selection box
-                                    const pointerPos = stage.getPointerPosition();
-                                    if (pointerPos) {
-                                        const adjustedPos = {
-                                            x: (pointerPos.x - stagePosition.x) / scale,
-                                            y: (pointerPos.y - stagePosition.y) / scale,
-                                        };
+                                    // Start selection box - use Layer's getRelativePointerPosition
+                                    const pos = getCanvasPositionFromKonvaEvent(e);
+                                    if (pos) {
                                         setSelectionBox({
-                                            startX: adjustedPos.x,
-                                            startY: adjustedPos.y,
-                                            endX: adjustedPos.x,
-                                            endY: adjustedPos.y,
+                                            startX: pos.x,
+                                            startY: pos.y,
+                                            endX: pos.x,
+                                            endY: pos.y,
                                             active: true,
                                         });
                                     }
@@ -2221,18 +2897,13 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                     }));
                                 }
                             } else if (selectionBox?.active) {
-                                // Update selection box
-                                const stage = e.target.getStage();
-                                const pointerPos = stage.getPointerPosition();
-                                if (pointerPos) {
-                                    const adjustedPos = {
-                                        x: (pointerPos.x - stagePosition.x) / scale,
-                                        y: (pointerPos.y - stagePosition.y) / scale,
-                                    };
+                                // Update selection box - use Layer's getRelativePointerPosition
+                                const pos = getCanvasPositionFromKonvaEvent(e);
+                                if (pos) {
                                     setSelectionBox(prev => prev ? {
                                         ...prev,
-                                        endX: adjustedPos.x,
-                                        endY: adjustedPos.y,
+                                        endX: pos.x,
+                                        endY: pos.y,
                                     } : null);
                                 }
                             } else {
@@ -2329,48 +3000,63 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             e.evt.preventDefault();
                         }}
                         ref={stageRef}
-                        style={{ background: '#ffffff', cursor: isRightMouseDown ? 'grabbing' : 'default' }}
+                        style={{
+                            width: CANVAS_WIDTH,
+                            height: CANVAS_HEIGHT,
+                            background: '#ffffff',
+                            cursor: isRightMouseDown ? 'grabbing' : 'default'
+                        }}
                     >
                         <Layer>
-                            {/* Grid */}
+                            {/* Grid lines */}
                             {showGrid && (
                                 <Group name="grid-group" listening={false}>
-                                    {Array.from({ length: Math.ceil(CANVAS_WIDTH / 50) }).map((_, i) => (
+                                    {/* Vertical grid lines */}
+                                    {Array.from({ length: Math.ceil(CANVAS_WIDTH / 50) + 1 }).map((_, i) => (
                                         <Line
                                             key={`v-${i}`}
                                             name="grid-line"
                                             points={[i * 50, 0, i * 50, CANVAS_HEIGHT]}
                                             stroke="#9ca3af"
-                                            strokeWidth={1}
+                                            strokeWidth={0.75}
                                             listening={false}
                                         />
                                     ))}
-                                    {/* Right edge */}
-                                    <Line
-                                        name="grid-line"
-                                        points={[CANVAS_WIDTH, 0, CANVAS_WIDTH, CANVAS_HEIGHT]}
-                                        stroke="#9ca3af"
-                                        strokeWidth={1}
-                                        listening={false}
-                                    />
-                                    {Array.from({ length: Math.ceil(CANVAS_HEIGHT / 50) }).map((_, i) => (
+                                    {/* Horizontal grid lines */}
+                                    {Array.from({ length: Math.ceil(CANVAS_HEIGHT / 50) + 1 }).map((_, i) => (
                                         <Line
                                             key={`h-${i}`}
                                             name="grid-line"
                                             points={[0, i * 50, CANVAS_WIDTH, i * 50]}
                                             stroke="#9ca3af"
-                                            strokeWidth={1}
+                                            strokeWidth={0.75}
                                             listening={false}
                                         />
                                     ))}
-                                    {/* Bottom edge */}
-                                    <Line
-                                        name="grid-line"
-                                        points={[0, CANVAS_HEIGHT, CANVAS_WIDTH, CANVAS_HEIGHT]}
-                                        stroke="#9ca3af"
-                                        strokeWidth={1}
+                                </Group>
+                            )}
+
+                            {/* Capture Area Boundary - only shown when toggled */}
+                            {showCaptureArea && (
+                                <Group name="capture-area-group" listening={false}>
+                                    {/* Dashed border showing what will be visible in preview/live */}
+                                    <Rect
+                                        name="capture-boundary"
+                                        x={0}
+                                        y={0}
+                                        width={CANVAS_WIDTH}
+                                        height={CANVAS_HEIGHT}
+                                        stroke="#3b82f6"
+                                        strokeWidth={2}
+                                        fill="transparent"
                                         listening={false}
+                                        dash={[8, 4]}
                                     />
+                                    {/* Corner markers for emphasis */}
+                                    <Line points={[0, 25, 0, 0, 25, 0]} stroke="#3b82f6" strokeWidth={3} listening={false} />
+                                    <Line points={[CANVAS_WIDTH - 25, 0, CANVAS_WIDTH, 0, CANVAS_WIDTH, 25]} stroke="#3b82f6" strokeWidth={3} listening={false} />
+                                    <Line points={[0, CANVAS_HEIGHT - 25, 0, CANVAS_HEIGHT, 25, CANVAS_HEIGHT]} stroke="#3b82f6" strokeWidth={3} listening={false} />
+                                    <Line points={[CANVAS_WIDTH - 25, CANVAS_HEIGHT, CANVAS_WIDTH, CANVAS_HEIGHT, CANVAS_WIDTH, CANVAS_HEIGHT - 25]} stroke="#3b82f6" strokeWidth={3} listening={false} />
                                 </Group>
                             )}
 
@@ -2386,8 +3072,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                 />
                             )}
 
-                            {/* Elements */}
-                            {elements.map(renderElement)}
+                            {/* Elements - sorted by zIndex so higher values render on top */}
+                            {[...elements].sort((a, b) => a.zIndex - b.zIndex).map(renderElement)}
 
                             {/* Freehand drawing preview */}
                             {isDrawing && tool === 'freehand' && freehandPoints.length > 0 && (
@@ -2407,13 +3093,14 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             {selectedElementIds.length === 1 && elements.find(el => el.id === selectedElementIds[0] && (el.type === 'line' || el.type === 'arrow')) && (() => {
                                 const element = elements.find(el => el.id === selectedElementIds[0])!;
                                 const points = element.points || [0, 0, 100, 0];
+                                const dragOffset = lineArrowDragOffsetRef.current;
 
                                 return (
                                     <Group>
                                         {/* Start point anchor */}
                                         <Circle
-                                            x={points[0]}
-                                            y={points[1]}
+                                            x={points[0] + dragOffset.x}
+                                            y={points[1] + dragOffset.y}
                                             radius={8}
                                             fill="#3b82f6"
                                             stroke="#1d4ed8"
@@ -2421,15 +3108,36 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                             draggable={true}
                                             onDragMove={(e) => {
                                                 const newPoints = [...points];
-                                                newPoints[0] = e.target.x();
-                                                newPoints[1] = e.target.y();
+                                                let newX = e.target.x() - dragOffset.x;
+                                                let newY = e.target.y() - dragOffset.y;
+
+                                                // When Shift is held, constrain to horizontal or vertical
+                                                if (isShiftPressedRef.current) {
+                                                    const otherX = points[2];
+                                                    const otherY = points[3];
+                                                    const deltaX = Math.abs(newX - otherX);
+                                                    const deltaY = Math.abs(newY - otherY);
+
+                                                    if (deltaX > deltaY) {
+                                                        // Horizontal line - constrain Y to other point's Y
+                                                        newY = otherY;
+                                                    } else {
+                                                        // Vertical line - constrain X to other point's X
+                                                        newX = otherX;
+                                                    }
+                                                    e.target.x(newX + dragOffset.x);
+                                                    e.target.y(newY + dragOffset.y);
+                                                }
+
+                                                newPoints[0] = newX;
+                                                newPoints[1] = newY;
                                                 updateElement(selectedElementIds[0], { points: newPoints });
                                             }}
                                         />
                                         {/* End point anchor */}
                                         <Circle
-                                            x={points[2]}
-                                            y={points[3]}
+                                            x={points[2] + dragOffset.x}
+                                            y={points[3] + dragOffset.y}
                                             radius={8}
                                             fill="#3b82f6"
                                             stroke="#1d4ed8"
@@ -2437,8 +3145,29 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                             draggable={true}
                                             onDragMove={(e) => {
                                                 const newPoints = [...points];
-                                                newPoints[2] = e.target.x();
-                                                newPoints[3] = e.target.y();
+                                                let newX = e.target.x() - dragOffset.x;
+                                                let newY = e.target.y() - dragOffset.y;
+
+                                                // When Shift is held, constrain to horizontal or vertical
+                                                if (isShiftPressedRef.current) {
+                                                    const otherX = points[0];
+                                                    const otherY = points[1];
+                                                    const deltaX = Math.abs(newX - otherX);
+                                                    const deltaY = Math.abs(newY - otherY);
+
+                                                    if (deltaX > deltaY) {
+                                                        // Horizontal line - constrain Y to other point's Y
+                                                        newY = otherY;
+                                                    } else {
+                                                        // Vertical line - constrain X to other point's X
+                                                        newX = otherX;
+                                                    }
+                                                    e.target.x(newX + dragOffset.x);
+                                                    e.target.y(newY + dragOffset.y);
+                                                }
+
+                                                newPoints[2] = newX;
+                                                newPoints[3] = newY;
                                                 updateElement(selectedElementIds[0], { points: newPoints });
                                             }}
                                         />
@@ -2471,6 +3200,10 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             {/* Transformer */}
                             <Transformer
                                 ref={transformerRef}
+                                anchorSize={6}
+                                anchorCornerRadius={2}
+                                borderStrokeWidth={1}
+                                rotateAnchorOffset={15}
                                 boundBoxFunc={(oldBox, newBox) => {
                                     // Minimum size constraint
                                     if (newBox.width < 5 || newBox.height < 5) {
@@ -2535,8 +3268,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                         <div
                             className="absolute z-50 transform -translate-x-1/2 -translate-y-1/2"
                             style={{
-                                left: namingPosition.x,
-                                top: namingPosition.y,
+                                left: editingLabelPosition.x,
+                                top: editingLabelPosition.y,
                             }}
                         >
                             <div className="bg-card p-2 rounded-lg shadow-lg border border-border min-w-[300px]">
@@ -2562,6 +3295,37 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                     </div>
                                 </div>
                             </div>
+                        </div>
+                    )}
+
+                    {/* Label Edit Input (for element labels) */}
+                    {editingLabelId && (
+                        <div
+                            className="absolute z-50 transform -translate-x-1/2 -translate-y-1/2 pointer-events-auto"
+                            style={{
+                                left: editingLabelPosition.x,
+                                top: editingLabelPosition.y,
+                            }}
+                            onMouseDown={(e) => e.stopPropagation()}
+                        >
+                            <input
+                                ref={labelEditInputRef}
+                                value={editingLabelValue}
+                                onChange={(e) => setEditingLabelValue(e.target.value)}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        finishLabelEdit(true);
+                                    }
+                                    if (e.key === 'Escape') {
+                                        e.preventDefault();
+                                        finishLabelEdit(false);
+                                    }
+                                }}
+                                className="bg-transparent border-none text-center text-xs outline-none focus:outline-none focus:ring-0 min-w-[60px] text-black"
+                                style={{ caretColor: 'black' }}
+                                placeholder=""
+                            />
                         </div>
                     )}
                 </div>
@@ -2593,6 +3357,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                         <TabsContent value="properties" className="flex-1 m-0 overflow-hidden">
                             <PropertiesPanel
                                 element={selectedElement}
+                                elements={elements}
                                 onUpdateElement={updateElement}
                             />
                         </TabsContent>
@@ -2605,6 +3370,10 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                 onToggleVisibility={handleToggleVisibility}
                                 onToggleLock={handleToggleLock}
                                 onReorder={handleReorderElements}
+                                onNameElement={(id, name) => {
+                                    // Directly update the element's name (inline editing in LayersPanel)
+                                    updateElement(id, { name });
+                                }}
                             />
                         </TabsContent>
 
@@ -2618,61 +3387,14 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 </div>
             </div>
 
-            {/* Exit Warning Dialog */}
-            <Dialog open={showExitWarning} onOpenChange={setShowExitWarning}>
-                <DialogContent className="sm:max-w-md">
-                    <DialogHeader>
-                        <DialogTitle className="flex items-center gap-2">
-                            <AlertTriangle className="h-5 w-5 text-amber-500" />
-                            Save Before Leaving
-                        </DialogTitle>
-                        <DialogDescription className="pt-2">
-                            Save everything before you close.
-                        </DialogDescription>
-                    </DialogHeader>
-                    <div className="flex items-start space-x-2 py-4">
-                        <Checkbox
-                            id="dont-remind"
-                            checked={dontRemindSave}
-                            onCheckedChange={(checked) => {
-                                const value = checked === true;
-                                setDontRemindSave(value);
-                                localStorage.setItem('mapEditor-dontRemindSave', value.toString());
-                            }}
-                        />
-                        <div className="grid gap-1.5 leading-none">
-                            <Label htmlFor="dont-remind" className="text-sm font-medium cursor-pointer">
-                                Don't remind me again
-                            </Label>
-                            <p className="text-xs text-muted-foreground">
-                                It is considered a best practice to keep reminding
-                                <br />
-                                you for saving your work.
-                            </p>
-                        </div>
-                    </div>
-                    <DialogFooter className="flex gap-2 sm:gap-0">
-                        <Button
-                            variant="outline"
-                            onClick={() => {
-                                setShowExitWarning(false);
-                                setMode('choice');
-                            }}
-                        >
-                            Leave Anyway
-                        </Button>
-                        <Button
-                            onClick={async () => {
-                                setShowExitWarning(false);
-                                await handleManualSave();
-                            }}
-                        >
-                            <Save className="h-4 w-4 mr-2" />
-                            Save & Stay
-                        </Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
+            {/* Preview Modal */}
+            <PreviewModal
+                isOpen={isPreviewOpen}
+                onClose={() => setIsPreviewOpen(false)}
+                storeId={storeId}
+                elements={elements}
+                mapImageUrl={mapImageUrl}
+            />
         </div>
     );
 };

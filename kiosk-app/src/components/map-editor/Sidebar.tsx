@@ -53,11 +53,13 @@ const SmartPinIcon = ({ className = "h-5 w-5" }: { className?: string }) => (
   </svg>
 );
 
-// Static Pin icon - pin with info indicator
+// Static Pin icon - cornered square badge with pointer
 const StaticPinIcon = ({ className = "h-5 w-5" }: { className?: string }) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
-    {/* Pin shape */}
-    <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" />
+    {/* Rounded rectangle body */}
+    <rect x="4" y="3" width="16" height="12" rx="2" ry="2" />
+    {/* Triangular pointer at bottom */}
+    <path d="M9 15 L12 21 L15 15" fill="currentColor" />
     {/* Info "i" inside */}
     <circle cx="12" cy="7" r="0.5" fill="currentColor" />
     <path d="M12 9v3" strokeWidth="2" />
@@ -99,7 +101,7 @@ const Sidebar = ({ activeTool, onToolChange, onDeleteSelected, hasSelection }: T
   };
 
   return (
-    <div className="w-64 bg-card border-r border-border flex flex-col h-full">
+    <div className="w-64 bg-card border-r border-border flex flex-col h-full relative z-20 flex-shrink-0">
       <div className="p-4 border-b border-border">
         <h2 className="font-semibold mb-2">Tools</h2>
         <div className="flex gap-2">
@@ -182,12 +184,12 @@ const Sidebar = ({ activeTool, onToolChange, onDeleteSelected, hasSelection }: T
                     ${activeTool === tool.id ? 'border-primary bg-accent' : 'border-border'}
                   `}
                 >
-                  <div className={`${tool.color}`}>
+                  <div className={`${tool.color} flex-shrink-0`}>
                     <tool.icon className="h-10 w-10" />
                   </div>
-                  <div className="flex-1 min-w-0">
+                  <div className="flex-1 min-w-0 overflow-hidden">
                     <span className="font-medium text-sm block">{tool.label}</span>
-                    <span className="text-xs text-muted-foreground block truncate">{tool.description}</span>
+                    <span className="text-xs text-muted-foreground block leading-tight">{tool.description}</span>
                   </div>
                 </div>
               ))}

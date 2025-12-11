@@ -1,7 +1,9 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Stage, Layer, Image as KonvaImage, Rect, Circle, Line, RegularPolygon, Group, Text as KonvaText } from 'react-konva';
+import Konva from 'konva';
 import useImage from 'use-image';
-import { MapPin, Loader2, AlertCircle } from 'lucide-react';
+import { MapPin, Loader2, AlertCircle, ZoomIn, ZoomOut, Maximize } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { Product } from '@/data/products';
 
 interface StoreMapProps {
@@ -35,12 +37,15 @@ interface MapElement {
   freehandPoints?: number[];
   sides?: number;
   animationStyle?: number;
+  motionScale?: number;
   pinLabel?: string;
   pinLabelFontSize?: number;
   pinLabelColor?: string;
   pinLabelFontWeight?: string;
   showNameOn?: string;
 }
+
+import { calculateFitToViewScale } from './map-editor/types';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 const CANVAS_WIDTH = 1200;
@@ -70,14 +75,21 @@ const animationStyles = `
 }
 `;
 
+const BASE_SCALE = 0.58; // This represents "100%" zoom - fits the capture area perfectly
+
 const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
   const [mapImageUrl, setMapImageUrl] = useState<string | null>(null);
   const [elements, setElements] = useState<MapElement[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeSmartPins, setActiveSmartPins] = useState<string[]>([]);
-  const [scale, setScale] = useState(1);
+  const [scale, setScale] = useState(BASE_SCALE);
+  const [manualZoom, setManualZoom] = useState<number | null>(BASE_SCALE); // Start at "100%" zoom
+  const [fitScale, setFitScale] = useState(1); // The auto-fit scale for reference
+  const [stagePosition, setStagePosition] = useState({ x: 0, y: 0 }); // For panning/dragging
+  const [isDragging, setIsDragging] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<Konva.Stage>(null);
 
   // Load map image
   const [loadedImage] = useImage(mapImageUrl ? `${API_URL}${mapImageUrl}` : '');
@@ -89,7 +101,7 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
       setError(null);
       
       try {
-        const response = await fetch(`${API_URL}/api/admin/stores/${storeId}/map`);
+        const response = await fetch(`${API_URL}/api/admin/stores/${storeId}/map?published=true`);
         if (!response.ok) {
           throw new Error('Failed to load map');
         }
@@ -132,6 +144,7 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
               freehandPoints: metadata.freehandPoints,
               sides: metadata.sides ?? 6,
               animationStyle: metadata.animationStyle ?? 1,
+              motionScale: metadata.motionScale ?? 1,
               pinLabel: metadata.pinLabel ?? '',
               pinLabelFontSize: metadata.pinLabelFontSize ?? 12,
               pinLabelColor: metadata.pinLabelColor ?? '#ffffff',
@@ -160,22 +173,246 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
     }
   }, [selectedProduct]);
 
-  // Calculate scale to fit container
+  // Calculate scale to fit container using shared utility
   useEffect(() => {
     const updateScale = () => {
       if (containerRef.current) {
-        const containerWidth = containerRef.current.offsetWidth;
-        const containerHeight = containerRef.current.offsetHeight;
-        const scaleX = containerWidth / CANVAS_WIDTH;
-        const scaleY = containerHeight / CANVAS_HEIGHT;
-        setScale(Math.min(scaleX, scaleY, 1));
+        const newFitScale = calculateFitToViewScale(
+          containerRef.current.offsetWidth,
+          containerRef.current.offsetHeight
+        );
+        setFitScale(newFitScale);
+        // Use manual zoom if set, otherwise use auto-fit
+        setScale(manualZoom !== null ? manualZoom : newFitScale);
       }
     };
-    
+
     updateScale();
     window.addEventListener('resize', updateScale);
     return () => window.removeEventListener('resize', updateScale);
+  }, [manualZoom]);
+
+  // Zoom controls
+  const handleZoomIn = useCallback(() => {
+    setManualZoom(prev => {
+      const currentScale = prev !== null ? prev : fitScale;
+      return Math.min(currentScale * 1.25, 3);
+    });
+  }, [fitScale]);
+
+  const handleZoomOut = useCallback(() => {
+    setManualZoom(prev => {
+      const currentScale = prev !== null ? prev : fitScale;
+      return Math.max(currentScale / 1.25, 0.25);
+    });
+  }, [fitScale]);
+
+  const handleResetZoom = useCallback(() => {
+    setManualZoom(BASE_SCALE); // Reset to "100%" (0.58 scale)
+    setStagePosition({ x: 0, y: 0 }); // Reset position too
   }, []);
+
+  // Mouse wheel zoom handler
+  const handleWheel = useCallback((e: Konva.KonvaEventObject<WheelEvent>) => {
+    e.evt.preventDefault();
+
+    const stage = stageRef.current;
+    if (!stage) return;
+
+    const oldScale = manualZoom !== null ? manualZoom : fitScale;
+    const pointer = stage.getPointerPosition();
+    if (!pointer) return;
+
+    // Zoom direction
+    const direction = e.evt.deltaY > 0 ? -1 : 1;
+    const zoomFactor = 1.1;
+
+    let newScale = direction > 0 ? oldScale * zoomFactor : oldScale / zoomFactor;
+    newScale = Math.max(0.25, Math.min(3, newScale));
+
+    setManualZoom(newScale);
+  }, [fitScale, manualZoom]);
+
+  // Touch pinch zoom state
+  const lastTouchDistance = useRef<number | null>(null);
+  const lastTouchCenter = useRef<{ x: number; y: number } | null>(null);
+  const lastSingleTouchPosition = useRef<{ x: number; y: number } | null>(null);
+
+  // Touch handlers for pinch zoom and drag
+  const handleTouchStart = useCallback((e: Konva.KonvaEventObject<TouchEvent>) => {
+    const touches = e.evt.touches;
+    if (touches.length === 2) {
+      // Pinch zoom start
+      e.evt.preventDefault();
+      const dx = touches[0].clientX - touches[1].clientX;
+      const dy = touches[0].clientY - touches[1].clientY;
+      lastTouchDistance.current = Math.sqrt(dx * dx + dy * dy);
+      lastTouchCenter.current = {
+        x: (touches[0].clientX + touches[1].clientX) / 2,
+        y: (touches[0].clientY + touches[1].clientY) / 2
+      };
+      lastSingleTouchPosition.current = null;
+    } else if (touches.length === 1) {
+      // Single finger drag start
+      lastSingleTouchPosition.current = {
+        x: touches[0].clientX,
+        y: touches[0].clientY
+      };
+      setIsDragging(true);
+    }
+  }, []);
+
+  const handleTouchMove = useCallback((e: Konva.KonvaEventObject<TouchEvent>) => {
+    const touches = e.evt.touches;
+    if (touches.length === 2 && lastTouchDistance.current !== null) {
+      // Pinch zoom
+      e.evt.preventDefault();
+
+      const dx = touches[0].clientX - touches[1].clientX;
+      const dy = touches[0].clientY - touches[1].clientY;
+      const newDistance = Math.sqrt(dx * dx + dy * dy);
+
+      const oldScale = manualZoom !== null ? manualZoom : fitScale;
+      const scaleFactor = newDistance / lastTouchDistance.current;
+      let newScale = oldScale * scaleFactor;
+      newScale = Math.max(0.25, Math.min(3, newScale));
+
+      setManualZoom(newScale);
+      lastTouchDistance.current = newDistance;
+    } else if (touches.length === 1 && lastSingleTouchPosition.current !== null) {
+      // Single finger drag
+      e.evt.preventDefault();
+      const touch = touches[0];
+      const dx = touch.clientX - lastSingleTouchPosition.current.x;
+      const dy = touch.clientY - lastSingleTouchPosition.current.y;
+
+      setStagePosition(prev => ({
+        x: prev.x + dx,
+        y: prev.y + dy
+      }));
+
+      lastSingleTouchPosition.current = {
+        x: touch.clientX,
+        y: touch.clientY
+      };
+    }
+  }, [fitScale, manualZoom]);
+
+  const handleTouchEnd = useCallback(() => {
+    lastTouchDistance.current = null;
+    lastTouchCenter.current = null;
+    lastSingleTouchPosition.current = null;
+    setIsDragging(false);
+  }, []);
+
+  // Mouse drag handlers
+  const handleDragStart = useCallback(() => {
+    setIsDragging(true);
+  }, []);
+
+  const handleDragEnd = useCallback((e: Konva.KonvaEventObject<DragEvent>) => {
+    setIsDragging(false);
+    setStagePosition({
+      x: e.target.x(),
+      y: e.target.y()
+    });
+  }, []);
+
+  // Animation helper function
+  const getAnimationConfig = useCallback((style: number, baseY: number = 0, motionScale: number = 1) => {
+    const scaleDuration = (baseDuration: number) => baseDuration / Math.max(0.25, Math.min(3, motionScale));
+
+    switch (style) {
+      case 1: // Pulse
+        return { duration: scaleDuration(0.6), properties: { scaleX: 1.15, scaleY: 1.15, opacity: 0.8 }, easing: Konva.Easings.EaseInOut };
+      case 2: // Bounce
+        return { duration: scaleDuration(0.5), properties: { y: baseY - 10 }, easing: Konva.Easings.BounceEaseOut };
+      case 3: // Ripple
+        return { duration: scaleDuration(1), properties: { opacity: 0.5 }, easing: Konva.Easings.EaseOut };
+      case 4: // Flash
+        return { duration: scaleDuration(0.3), properties: { opacity: 0.3 }, easing: Konva.Easings.Linear };
+      case 5: // Glow
+        return { duration: scaleDuration(0.8), properties: { scaleX: 1.08, scaleY: 1.08 }, easing: Konva.Easings.EaseInOut };
+      default:
+        return null;
+    }
+  }, []);
+
+  // Run infinite animation for active smart pins
+  useEffect(() => {
+    if (!stageRef.current || activeSmartPins.length === 0) return;
+
+    const stage = stageRef.current;
+    const cleanupFunctions: (() => void)[] = [];
+
+    activeSmartPins.forEach(pinId => {
+      const element = elements.find(el => el.id === pinId);
+      if (!element || !element.animationStyle || element.animationStyle === 0) return;
+
+      const node = stage.findOne(`#smart-pin-${pinId}`);
+      if (!node) return;
+
+      const config = getAnimationConfig(element.animationStyle, node.y(), element.motionScale || 1);
+      if (!config) return;
+
+      const originalProps = {
+        scaleX: node.scaleX(),
+        scaleY: node.scaleY(),
+        opacity: node.opacity(),
+        y: node.y(),
+      };
+
+      let isRunning = true;
+
+      const runAnimation = () => {
+        if (!isRunning) return;
+
+        const forwardTween = new Konva.Tween({
+          node,
+          duration: config.duration,
+          easing: config.easing,
+          ...config.properties,
+          onFinish: () => {
+            if (!isRunning) return;
+            const reverseTween = new Konva.Tween({
+              node,
+              duration: config.duration,
+              easing: config.easing,
+              scaleX: originalProps.scaleX,
+              scaleY: originalProps.scaleY,
+              opacity: originalProps.opacity,
+              y: originalProps.y,
+              onFinish: () => {
+                if (isRunning) {
+                  setTimeout(runAnimation, 200);
+                }
+              },
+            });
+            reverseTween.play();
+          },
+        });
+        forwardTween.play();
+      };
+
+      // Start animation after a short delay to ensure node is rendered
+      setTimeout(runAnimation, 100);
+
+      cleanupFunctions.push(() => {
+        isRunning = false;
+        // Reset node to original state
+        if (node) {
+          node.scaleX(originalProps.scaleX);
+          node.scaleY(originalProps.scaleY);
+          node.opacity(originalProps.opacity);
+          node.y(originalProps.y);
+        }
+      });
+    });
+
+    return () => {
+      cleanupFunctions.forEach(cleanup => cleanup());
+    };
+  }, [activeSmartPins, elements, getAnimationConfig]);
 
   // Get trapezoid points
   const getTrapezoidPoints = (width: number, height: number): number[] => {
@@ -189,30 +426,6 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
     return [offset, 0, width, 0, width - offset, height, 0, height];
   };
 
-  // Get proportional pin points for smart-pin and static-pin
-  const getPinPoints = (width: number, height: number): number[] => {
-    const cornerRadius = width * 0.125;
-    const topEdgeOffset = height * 0.2;
-    const topCornerOffset = height * 0.3;
-    const bottomSquareY = height * 0.3;
-    const vStartY = height * 0.2;
-    const vWidth = width * 0.125;
-    
-    return [
-      -width / 2 + cornerRadius, -height + topEdgeOffset,
-      width / 2 - cornerRadius, -height + topEdgeOffset,
-      width / 2, -height + topCornerOffset,
-      width / 2, -bottomSquareY,
-      width / 2 - cornerRadius, -vStartY,
-      vWidth, -vStartY,
-      0, 0,
-      -vWidth, -vStartY,
-      -width / 2 + cornerRadius, -vStartY,
-      -width / 2, -bottomSquareY,
-      -width / 2, -height + topCornerOffset,
-      -width / 2 + cornerRadius, -height + topEdgeOffset,
-    ];
-  };
 
   // Get animation class based on style
   const getAnimationClass = (animationStyle: number) => {
@@ -358,22 +571,37 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
             lineJoin="round"
           />
         );
-      // Static pins are always visible
+      // Static pins - cornered square badge design
       case 'static-pin':
-        const staticPinPoints = getPinPoints(element.width, element.height);
-        // Use custom font size from properties, or fall back to default
+        const staticPinWidth = element.width || 55;
+        const staticPinHeight = (element.height || 55) * 0.7;
+        const staticPointerHeight = (element.height || 55) * 0.3;
+        const staticCornerRadius = 6;
         const staticLabelFontSize = element.pinLabelFontSize || 12;
-        // The rectangular box spans from y=-0.8*height (top) to y=-0.3*height (bottom)
-        // Center of the box is at y = -0.55*height
-        const staticBoxTop = -element.height * 0.8;
-        const staticBoxBottom = -element.height * 0.3;
-        const staticBoxCenterY = (staticBoxTop + staticBoxBottom) / 2;
         const staticLabelColor = element.pinLabelColor || '#ffffff';
         const staticLabelFontWeight = element.pinLabelFontWeight || 'bold';
+
         return (
           <Group key={element.id} x={element.x} y={element.y}>
+            {/* Rectangle body with rounded corners */}
+            <Rect
+              x={-staticPinWidth / 2}
+              y={-staticPinHeight - staticPointerHeight}
+              width={staticPinWidth}
+              height={staticPinHeight}
+              fill={element.fillColor}
+              opacity={element.fillOpacity}
+              stroke={element.strokeColor}
+              strokeWidth={element.strokeWidth}
+              cornerRadius={staticCornerRadius}
+            />
+            {/* Triangular pointer at bottom */}
             <Line
-              points={staticPinPoints}
+              points={[
+                -staticPinWidth * 0.2, -staticPointerHeight,
+                staticPinWidth * 0.2, -staticPointerHeight,
+                0, 0,
+              ]}
               closed={true}
               fill={element.fillColor}
               opacity={element.fillOpacity}
@@ -381,12 +609,23 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
               strokeWidth={element.strokeWidth}
               lineJoin="round"
             />
+            {/* Cover the stroke line between rectangle and pointer */}
+            <Line
+              points={[
+                -staticPinWidth * 0.18, -staticPointerHeight,
+                staticPinWidth * 0.18, -staticPointerHeight,
+              ]}
+              stroke={element.fillColor}
+              strokeWidth={(element.strokeWidth || 2) + 2}
+              opacity={element.fillOpacity}
+            />
+            {/* Pin label inside rectangle */}
             {element.pinLabel && (
               <KonvaText
                 text={element.pinLabel}
-                x={-element.width / 2 + 2}
-                y={staticBoxCenterY - staticLabelFontSize / 2}
-                width={element.width - 4}
+                x={-staticPinWidth / 2}
+                y={-staticPinHeight - staticPointerHeight + (staticPinHeight - staticLabelFontSize) / 2}
+                width={staticPinWidth}
                 fontSize={staticLabelFontSize}
                 fontFamily="Arial, sans-serif"
                 fontStyle={staticLabelFontWeight}
@@ -402,89 +641,127 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
   };
 
   // Render active smart pin (when product is selected)
+  // Design: Classic teardrop pin (like Google Maps) with floating label above
   const renderActiveSmartPin = (element: MapElement) => {
     if (element.type !== 'smart-pin' || !activeSmartPins.includes(element.id)) {
       return null;
     }
 
-    const activePinPoints = getPinPoints(element.width, element.height);
-    // Calculate proportional inner rectangle dimensions
-    const innerRectWidth = element.width * 0.5;
-    const innerRectHeight = element.height * 0.35;
-    const innerRectY = -element.height + element.height * 0.25;
-    const innerRectRadius = Math.min(innerRectWidth, innerRectHeight) * 0.15;
-    
-    // Build location text from product data
-    const locationText = selectedProduct?.aisle 
+    // Build location text (e.g., "Aisle C5, Shelf 1" or "Aisle C5")
+    const locationText = selectedProduct?.aisle
       ? `Aisle ${selectedProduct.aisle}${selectedProduct.shelf ? `, Shelf ${selectedProduct.shelf}` : ''}`
-      : 'Location';
-    
-    // Calculate bubble width based on text length
-    const bubbleWidth = Math.max(100, locationText.length * 8 + 20);
-    const bubbleHeight = 28;
-    const bubbleFontSize = Math.max(10, element.height * 0.22);
+      : '';
+
+    // Pin size - use a fixed size for the teardrop
+    const pinSize = Math.max(element.width, element.height) * 1.2;
+    const pinRadius = pinSize * 0.4;
+
+    // Inner circle (hollow center) position - in the circular top part
+    const innerCircleRadius = pinRadius * 0.45;
+    const innerCircleY = -pinRadius - pinRadius * 0.2;
+
+    // Use element's colors instead of hardcoded red
+    const pinFillColor = element.fillColor || '#ef4444';
+    const pinStrokeColor = element.strokeColor || '#dc2626';
+
+    // Floating label dimensions
+    const labelFontSize = 12;
+    const labelPaddingX = 12;
+    const labelPaddingY = 8;
+    const labelHeight = labelFontSize + labelPaddingY * 2;
+    const textWidth = locationText.length * 7;
+    const labelWidth = Math.max(80, textWidth + labelPaddingX * 2);
+    const labelY = -pinSize - labelHeight - 12; // Above the pin
+    const labelRadius = 6;
+
+    // Arrow pointer connecting label to pin
+    const arrowWidth = 10;
+    const arrowHeight = 8;
 
     return (
-      <Group key={`active-${element.id}`} x={element.x} y={element.y}>
-        {/* Animated pin body */}
-        <Line
-          points={activePinPoints}
-          closed={true}
-          fill="#ef4444"
-          stroke="#b91c1c"
-          strokeWidth={2}
-          lineJoin="round"
-        />
-        {/* Inner centered rounded rectangle */}
-        <Rect
-          x={-innerRectWidth / 2}
-          y={innerRectY}
-          width={innerRectWidth}
-          height={innerRectHeight}
-          fill="#ffffff"
-          opacity={0.95}
-          cornerRadius={innerRectRadius}
-        />
-        {/* Location info bubble */}
-        {selectedProduct && (
-          <>
+      <Group key={`active-${element.id}`} id={`smart-pin-${element.id}`} x={element.x} y={element.y}>
+        {/* Floating label tooltip above the pin */}
+        {locationText && (
+          <Group>
+            {/* Label background */}
             <Rect
-              x={-bubbleWidth / 2}
-              y={-element.height - bubbleHeight - 8}
-              width={bubbleWidth}
-              height={bubbleHeight}
+              x={-labelWidth / 2}
+              y={labelY}
+              width={labelWidth}
+              height={labelHeight}
               fill="#1f2937"
-              cornerRadius={6}
-              shadowColor="#000000"
-              shadowBlur={4}
+              cornerRadius={labelRadius}
+              shadowColor="#000"
+              shadowBlur={10}
+              shadowOffset={{ x: 0, y: 3 }}
               shadowOpacity={0.3}
-              shadowOffsetY={2}
             />
-            {/* Triangle pointer from bubble to pin */}
+            {/* Arrow pointer pointing down */}
             <Line
               points={[
-                -6, -element.height - 8,
-                6, -element.height - 8,
-                0, -element.height + 2,
+                -arrowWidth / 2, labelY + labelHeight,
+                arrowWidth / 2, labelY + labelHeight,
+                0, labelY + labelHeight + arrowHeight,
               ]}
               closed={true}
               fill="#1f2937"
             />
+            {/* Label text */}
             <KonvaText
               text={locationText}
-              x={-bubbleWidth / 2}
-              y={-element.height - bubbleHeight - 2}
-              width={bubbleWidth}
-              height={bubbleHeight}
-              fontSize={bubbleFontSize}
-              fontFamily="Arial"
+              x={-labelWidth / 2}
+              y={labelY + labelPaddingY}
+              width={labelWidth}
+              fontSize={labelFontSize}
+              fontFamily="Arial, sans-serif"
               fontStyle="bold"
               fill="#ffffff"
               align="center"
-              verticalAlign="middle"
             />
-          </>
+          </Group>
         )}
+
+        {/* Teardrop pin - outer shape (uses element's colors) */}
+        <Circle
+          x={0}
+          y={innerCircleY}
+          radius={pinRadius}
+          fill={pinFillColor}
+          stroke={pinStrokeColor}
+          strokeWidth={element.strokeWidth || 2}
+        />
+
+        {/* Bottom triangle point of the teardrop */}
+        <Line
+          points={[
+            -pinRadius * 0.7, innerCircleY + pinRadius * 0.5,
+            pinRadius * 0.7, innerCircleY + pinRadius * 0.5,
+            0, pinSize * 0.35,
+          ]}
+          closed={true}
+          fill={pinFillColor}
+          stroke={pinStrokeColor}
+          strokeWidth={element.strokeWidth || 2}
+          lineJoin="round"
+        />
+
+        {/* Cover the stroke line between circle and triangle */}
+        <Line
+          points={[
+            -pinRadius * 0.65, innerCircleY + pinRadius * 0.5,
+            pinRadius * 0.65, innerCircleY + pinRadius * 0.5,
+          ]}
+          stroke={pinFillColor}
+          strokeWidth={4}
+        />
+
+        {/* Inner white circle (hollow center) */}
+        <Circle
+          x={0}
+          y={innerCircleY}
+          radius={innerCircleRadius}
+          fill="#ffffff"
+        />
       </Group>
     );
   };
@@ -573,16 +850,55 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
           </div>
 
           {/* Map Canvas */}
-          <div 
+          <div
             ref={containerRef}
             className="relative w-full h-[calc(100%-4rem)] border-2 border-border rounded-xl bg-white overflow-hidden flex items-center justify-center"
           >
+            {/* Zoom Controls */}
+            <div className="absolute bottom-3 left-3 z-10 flex flex-col gap-1.5 bg-white/95 backdrop-blur-sm border border-border rounded-lg shadow-sm p-1">
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleZoomIn} title="Zoom In">
+                <ZoomIn className="h-4 w-4" />
+              </Button>
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleZoomOut} title="Zoom Out">
+                <ZoomOut className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                onClick={handleResetZoom}
+                title="Fit to View"
+              >
+                <Maximize className="h-4 w-4" />
+              </Button>
+            </div>
+
+            {/* Zoom Level Indicator - normalized so BASE_SCALE (0.58) = 100% */}
+            <div className="absolute bottom-3 left-14 z-10 bg-white/95 backdrop-blur-sm border border-border rounded-md px-2 py-1 text-xs font-medium shadow-sm">
+              {Math.round((scale / BASE_SCALE) * 100)}%
+              {manualZoom === null && <span className="text-muted-foreground ml-1">(fit)</span>}
+            </div>
+
             <Stage
+              ref={stageRef}
               width={CANVAS_WIDTH * scale}
               height={CANVAS_HEIGHT * scale}
               scaleX={scale}
               scaleY={scale}
-              style={{ background: '#ffffff' }}
+              x={stagePosition.x}
+              y={stagePosition.y}
+              draggable={true}
+              onDragStart={handleDragStart}
+              onDragEnd={handleDragEnd}
+              style={{
+                background: '#ffffff',
+                touchAction: 'none',
+                cursor: isDragging ? 'grabbing' : 'grab'
+              }}
+              onWheel={handleWheel}
+              onTouchStart={handleTouchStart}
+              onTouchMove={handleTouchMove}
+              onTouchEnd={handleTouchEnd}
             >
               <Layer>
                 {/* Background image */}

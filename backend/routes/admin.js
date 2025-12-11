@@ -432,20 +432,32 @@ router.post('/import-products', upload.single('file'), async (req, res) => {
 router.get('/stores/:id/map', async (req, res) => {
   try {
     const { id } = req.params;
+    const { published } = req.query; // Query param to filter by published status
+
     const storeResult = await query('SELECT * FROM stores WHERE store_id = $1', [id]);
 
     if (storeResult.rows.length === 0) {
       return res.status(404).json({ error: 'Store not found' });
     }
 
-    const elementsResult = await query(
-      'SELECT * FROM store_map_elements WHERE store_id = $1 ORDER BY z_index, id',
-      [id]
-    );
+    // If published=true, only return published elements (for consumer view)
+    // Otherwise return all elements (for editor view)
+    let elementsQuery;
+    if (published === 'true') {
+      elementsQuery = await query(
+        'SELECT * FROM store_map_elements WHERE store_id = $1 AND is_published = true ORDER BY z_index, id',
+        [id]
+      );
+    } else {
+      elementsQuery = await query(
+        'SELECT * FROM store_map_elements WHERE store_id = $1 ORDER BY z_index, id',
+        [id]
+      );
+    }
 
     res.json({
       store: storeResult.rows[0],
-      elements: elementsResult.rows.map(row => ({
+      elements: elementsQuery.rows.map(row => ({
         ...row,
         metadata: typeof row.metadata === 'string' ? JSON.parse(row.metadata) : (row.metadata || {})
       }))
@@ -664,6 +676,218 @@ router.post('/stores/:id/map/elements', async (req, res) => {
   }
 });
 
+// ============================================
+// INDIVIDUAL MAP ELEMENT OPERATIONS (Auto-save)
+// ============================================
+
+// Create a single map element
+router.post('/stores/:id/map/element', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { element } = req.body;
+
+    if (!element) {
+      return res.status(400).json({ error: 'Element is required' });
+    }
+
+    const { type, name, x, y, width, height, color, zIndex, metadata, ...restProperties } = element;
+
+    const fullMetadata = {
+      ...(metadata || {}),
+      ...restProperties,
+      type: element.type,
+      showNameOn: element.showNameOn,
+      labelOffsetX: element.labelOffsetX,
+      labelOffsetY: element.labelOffsetY,
+      fillColor: element.fillColor,
+      fillOpacity: element.fillOpacity,
+      strokeColor: element.strokeColor,
+      strokeWidth: element.strokeWidth,
+      strokeOpacity: element.strokeOpacity,
+      rotation: element.rotation,
+      visible: element.visible,
+      locked: element.locked,
+      cornerRadius: element.cornerRadius,
+      text: element.text,
+      fontSize: element.fontSize,
+      fontFamily: element.fontFamily,
+      fontWeight: element.fontWeight,
+      textAlign: element.textAlign,
+      points: element.points,
+      freehandPoints: element.freehandPoints,
+      sides: element.sides,
+      animationStyle: element.animationStyle,
+      pinLabel: element.pinLabel,
+      pinLabelFontSize: element.pinLabelFontSize,
+      pinLabelColor: element.pinLabelColor,
+      pinLabelFontWeight: element.pinLabelFontWeight,
+      frontendId: element.id,
+    };
+
+    const result = await query(
+      `INSERT INTO store_map_elements
+        (store_id, element_type, name, x, y, width, height, color, z_index, metadata, is_published)
+       VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, false)
+       RETURNING id`,
+      [
+        id,
+        element.type,
+        element.name || null,
+        element.x,
+        element.y,
+        element.width,
+        element.height,
+        element.color || element.fillColor || '#3b82f6',
+        element.zIndex || 0,
+        JSON.stringify(fullMetadata)
+      ]
+    );
+
+    // Mark store as having draft changes
+    await query(
+      'UPDATE stores SET map_has_draft_changes = true WHERE store_id = $1',
+      [id]
+    );
+
+    const newDbId = result.rows[0].id;
+    console.log(`[CREATE ELEMENT] Created element ${newDbId} for store ${id}`);
+
+    res.json({
+      success: true,
+      elementId: newDbId,
+      frontendId: element.id
+    });
+  } catch (error) {
+    console.error('Error creating map element:', error);
+    res.status(500).json({ error: 'Failed to create map element', details: error.message });
+  }
+});
+
+// Update a single map element
+router.put('/stores/:id/map/element/:elementId', async (req, res) => {
+  try {
+    const { id, elementId } = req.params;
+    const { element } = req.body;
+
+    if (!element) {
+      return res.status(400).json({ error: 'Element is required' });
+    }
+
+    // Get existing element to preserve metadata we don't want to overwrite
+    const existing = await query(
+      'SELECT metadata FROM store_map_elements WHERE id = $1 AND store_id = $2',
+      [elementId, id]
+    );
+
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ error: 'Element not found' });
+    }
+
+    const existingMetadata = typeof existing.rows[0].metadata === 'string'
+      ? JSON.parse(existing.rows[0].metadata)
+      : (existing.rows[0].metadata || {});
+
+    const { type, name, x, y, width, height, color, zIndex, metadata, ...restProperties } = element;
+
+    const fullMetadata = {
+      ...existingMetadata,
+      ...(metadata || {}),
+      ...restProperties,
+      type: element.type,
+      showNameOn: element.showNameOn,
+      labelOffsetX: element.labelOffsetX,
+      labelOffsetY: element.labelOffsetY,
+      fillColor: element.fillColor,
+      fillOpacity: element.fillOpacity,
+      strokeColor: element.strokeColor,
+      strokeWidth: element.strokeWidth,
+      strokeOpacity: element.strokeOpacity,
+      rotation: element.rotation,
+      visible: element.visible,
+      locked: element.locked,
+      cornerRadius: element.cornerRadius,
+      text: element.text,
+      fontSize: element.fontSize,
+      fontFamily: element.fontFamily,
+      fontWeight: element.fontWeight,
+      textAlign: element.textAlign,
+      points: element.points,
+      freehandPoints: element.freehandPoints,
+      sides: element.sides,
+      animationStyle: element.animationStyle,
+      pinLabel: element.pinLabel,
+      pinLabelFontSize: element.pinLabelFontSize,
+      pinLabelColor: element.pinLabelColor,
+      pinLabelFontWeight: element.pinLabelFontWeight,
+      frontendId: existingMetadata.frontendId || element.id,
+    };
+
+    await query(
+      `UPDATE store_map_elements
+       SET element_type = $1, name = $2, x = $3, y = $4, width = $5, height = $6,
+           color = $7, z_index = $8, metadata = $9, updated_at = CURRENT_TIMESTAMP,
+           is_published = false
+       WHERE id = $10 AND store_id = $11`,
+      [
+        element.type,
+        element.name || null,
+        element.x,
+        element.y,
+        element.width,
+        element.height,
+        element.color || element.fillColor || '#3b82f6',
+        element.zIndex || 0,
+        JSON.stringify(fullMetadata),
+        elementId,
+        id
+      ]
+    );
+
+    // Mark store as having draft changes
+    await query(
+      'UPDATE stores SET map_has_draft_changes = true WHERE store_id = $1',
+      [id]
+    );
+
+    console.log(`[UPDATE ELEMENT] Updated element ${elementId} for store ${id}`);
+
+    res.json({ success: true, elementId: parseInt(elementId) });
+  } catch (error) {
+    console.error('Error updating map element:', error);
+    res.status(500).json({ error: 'Failed to update map element', details: error.message });
+  }
+});
+
+// Delete a single map element
+router.delete('/stores/:id/map/element/:elementId', async (req, res) => {
+  try {
+    const { id, elementId } = req.params;
+
+    // Check if element exists
+    const existing = await query(
+      'SELECT id FROM store_map_elements WHERE id = $1 AND store_id = $2',
+      [elementId, id]
+    );
+
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ error: 'Element not found' });
+    }
+
+    // Delete will cascade to product_map_links
+    await query(
+      'DELETE FROM store_map_elements WHERE id = $1 AND store_id = $2',
+      [elementId, id]
+    );
+
+    console.log(`[DELETE ELEMENT] Deleted element ${elementId} for store ${id}`);
+
+    res.json({ success: true, elementId: parseInt(elementId) });
+  } catch (error) {
+    console.error('Error deleting map element:', error);
+    res.status(500).json({ error: 'Failed to delete map element', details: error.message });
+  }
+});
+
 // Delete store map image
 router.delete('/stores/:id/map/image', async (req, res) => {
   try {
@@ -688,6 +912,142 @@ router.delete('/stores/:id/map/image', async (req, res) => {
   } catch (error) {
     console.error('Error deleting map:', error);
     res.status(500).json({ error: 'Failed to delete map', details: error.message });
+  }
+});
+
+// ============================================
+// MAP PUBLISH ENDPOINTS
+// ============================================
+
+// Publish map - mark all current elements as published
+router.post('/stores/:id/map/publish', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+
+    await client.query('BEGIN');
+
+    // Mark all current elements for this store as published
+    const result = await client.query(
+      `UPDATE store_map_elements
+       SET is_published = true,
+           published_at = CURRENT_TIMESTAMP
+       WHERE store_id = $1`,
+      [id]
+    );
+
+    // Update store's map_published_at timestamp and clear draft flag
+    await client.query(
+      `UPDATE stores
+       SET map_published_at = CURRENT_TIMESTAMP,
+           map_has_draft_changes = false
+       WHERE store_id = $1`,
+      [id]
+    );
+
+    await client.query('COMMIT');
+
+    res.json({
+      success: true,
+      publishedCount: result.rowCount,
+      publishedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error publishing map:', error);
+    res.status(500).json({ error: 'Failed to publish map', details: error.message });
+  } finally {
+    client.release();
+  }
+});
+
+// Get map publish status
+router.get('/stores/:id/map/status', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const storeResult = await query(
+      'SELECT map_published_at, map_has_draft_changes FROM stores WHERE store_id = $1',
+      [id]
+    );
+
+    if (storeResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Store not found' });
+    }
+
+    // Count unpublished elements
+    const unpublishedCount = await query(
+      'SELECT COUNT(*) FROM store_map_elements WHERE store_id = $1 AND is_published = false',
+      [id]
+    );
+
+    // Count total elements
+    const totalCount = await query(
+      'SELECT COUNT(*) FROM store_map_elements WHERE store_id = $1',
+      [id]
+    );
+
+    res.json({
+      lastPublishedAt: storeResult.rows[0].map_published_at,
+      hasDraftChanges: storeResult.rows[0].map_has_draft_changes || parseInt(unpublishedCount.rows[0].count) > 0,
+      unpublishedElementCount: parseInt(unpublishedCount.rows[0].count),
+      totalElementCount: parseInt(totalCount.rows[0].count)
+    });
+  } catch (error) {
+    console.error('Error fetching map status:', error);
+    res.status(500).json({ error: 'Failed to fetch map status', details: error.message });
+  }
+});
+
+// Get products for preview selector (only products with map links)
+router.get('/stores/:storeId/products/preview', async (req, res) => {
+  try {
+    const { storeId } = req.params;
+    const { search = '', limit = 100 } = req.query;
+
+    let sql = `
+      SELECT
+        p.product_id,
+        p.sku,
+        p.product_name,
+        p.category,
+        p.image_url,
+        si.aisle,
+        si.shelf_position as shelf,
+        pml.map_element_id
+      FROM products p
+      LEFT JOIN store_inventory si ON p.product_id = si.product_id AND si.store_id = $1
+      LEFT JOIN product_map_links pml ON p.product_id = pml.product_id AND pml.store_id = $1
+      WHERE pml.map_element_id IS NOT NULL
+    `;
+
+    const params = [storeId];
+
+    if (search) {
+      sql += ` AND (LOWER(p.product_name) LIKE $2 OR LOWER(p.sku) LIKE $2)`;
+      params.push(`%${search.toLowerCase()}%`);
+    }
+
+    sql += ` ORDER BY p.product_name LIMIT $${params.length + 1}`;
+    params.push(parseInt(limit));
+
+    const result = await query(sql, params);
+
+    res.json({
+      products: result.rows.map(row => ({
+        id: row.product_id,
+        name: row.product_name,
+        sku: row.sku,
+        category: row.category,
+        imageUrl: row.image_url,
+        aisle: row.aisle,
+        shelf: row.shelf,
+        mapElementId: row.map_element_id
+      }))
+    });
+  } catch (error) {
+    console.error('Error fetching products for preview:', error);
+    res.status(500).json({ error: 'Failed to fetch products', details: error.message });
   }
 });
 

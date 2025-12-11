@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import type { MapElement } from './types';
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 
 interface LayersPanelProps {
   elements: MapElement[];
@@ -12,6 +12,7 @@ interface LayersPanelProps {
   onToggleVisibility: (id: string) => void;
   onToggleLock: (id: string) => void;
   onReorder: (elements: MapElement[]) => void;
+  onNameElement?: (id: string, name: string) => void;
 }
 
 const getElementIcon = (type: MapElement['type']) => {
@@ -37,11 +38,25 @@ const LayersPanel = ({
   onToggleVisibility,
   onToggleLock,
   onReorder,
+  onNameElement,
 }: LayersPanelProps) => {
   const [draggedId, setDraggedId] = useState<string | null>(null);
 
+  // Inline editing state
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingValue, setEditingValue] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
   // Sort elements by zIndex in reverse (highest first for layer order)
   const sortedElements = [...elements].sort((a, b) => b.zIndex - a.zIndex);
+
+  // Focus input when editing starts
+  useEffect(() => {
+    if (editingId && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editingId]);
 
   const handleDragStart = (e: React.DragEvent, id: string) => {
     e.dataTransfer.effectAllowed = 'move';
@@ -89,6 +104,41 @@ const LayersPanel = ({
     setDraggedId(null);
   };
 
+  // Start inline editing
+  const startEditing = (element: MapElement) => {
+    const displayName = (element.showNameOn === 'layers' || element.showNameOn === 'both' || !element.showNameOn)
+      ? (element.name || `${element.type} ${element.id.slice(-4)}`)
+      : `${element.type} ${element.id.slice(-4)}`;
+    setEditingId(element.id);
+    setEditingValue(element.name || '');
+  };
+
+  // Save inline editing
+  const saveEditing = () => {
+    if (editingId && onNameElement) {
+      onNameElement(editingId, editingValue.trim());
+    }
+    setEditingId(null);
+    setEditingValue('');
+  };
+
+  // Cancel inline editing
+  const cancelEditing = () => {
+    setEditingId(null);
+    setEditingValue('');
+  };
+
+  // Handle key events in input
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      saveEditing();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      cancelEditing();
+    }
+  };
+
   return (
     <div className="h-full bg-card border-l border-border flex flex-col overflow-hidden">
       <div className="px-4 py-3 border-b border-border flex-shrink-0">
@@ -105,10 +155,16 @@ const LayersPanel = ({
             sortedElements.map((element) => (
               <div
                 key={element.id}
-                draggable
+                draggable={editingId !== element.id}
                 onDragStart={(e) => handleDragStart(e, element.id)}
                 onDragOver={handleDragOver}
                 onDrop={(e) => handleDrop(e, element.id)}
+                onDoubleClick={(e) => {
+                  e.stopPropagation();
+                  if (editingId !== element.id) {
+                    startEditing(element);
+                  }
+                }}
                 className={cn(
                   'group flex items-center gap-1 px-2 py-1.5 rounded-md cursor-pointer transition-colors min-w-0',
                   selectedId === element.id
@@ -117,7 +173,11 @@ const LayersPanel = ({
                   !element.visible && 'opacity-50',
                   draggedId === element.id && 'opacity-50'
                 )}
-                onClick={() => onSelect(element.id)}
+                onClick={() => {
+                  if (editingId !== element.id) {
+                    onSelect(element.id);
+                  }
+                }}
               >
                 <GripVertical className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 cursor-grab flex-shrink-0" />
 
@@ -125,11 +185,25 @@ const LayersPanel = ({
                   {getElementIcon(element.type)}
                 </span>
 
-                <span className="flex-1 text-sm truncate min-w-0">
-                  {(element.showNameOn === 'layers' || element.showNameOn === 'both' || !element.showNameOn)
-                    ? (element.name || `${element.type} ${element.id.slice(-4)}`)
-                    : `${element.type} ${element.id.slice(-4)}`}
-                </span>
+                {editingId === element.id ? (
+                  <input
+                    ref={inputRef}
+                    type="text"
+                    value={editingValue}
+                    onChange={(e) => setEditingValue(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    onBlur={saveEditing}
+                    onClick={(e) => e.stopPropagation()}
+                    className="flex-1 text-sm min-w-0 bg-background border border-input rounded px-1 py-0.5 outline-none focus:border-primary"
+                    placeholder="Enter name..."
+                  />
+                ) : (
+                  <span className="flex-1 text-sm truncate min-w-0">
+                    {(element.showNameOn === 'layers' || element.showNameOn === 'both' || !element.showNameOn)
+                      ? (element.name || `${element.type} ${element.id.slice(-4)}`)
+                      : `${element.type} ${element.id.slice(-4)}`}
+                  </span>
+                )}
 
                 <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 flex-shrink-0">
                   <Button
@@ -174,4 +248,3 @@ const LayersPanel = ({
 };
 
 export default LayersPanel;
-
