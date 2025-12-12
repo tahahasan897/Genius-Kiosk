@@ -1,6 +1,6 @@
 export type ElementType = 'rectangle' | 'circle' | 'line' | 'arrow' | 'polygon' | 'text' | 'freehand' | 'triangle' | 'trapezoid' | 'parallelogram' | 'smart-pin' | 'static-pin';
 
-export type Tool = 'select' | 'rectangle' | 'circle' | 'line' | 'arrow' | 'polygon' | 'text' | 'freehand' | 'triangle' | 'trapezoid' | 'parallelogram' | 'smart-pin' | 'static-pin';
+export type Tool = 'select' | 'rectangle' | 'circle' | 'line' | 'arrow' | 'polygon' | 'text' | 'freehand' | 'triangle' | 'trapezoid' | 'parallelogram' | 'smart-pin' | 'static-pin' | 'eraser';
 
 export type NameVisibility = 'layers' | 'canvas' | 'both' | 'none';
 
@@ -125,15 +125,15 @@ export const defaultStaticPin: Partial<MapElement> = {
 // Default sizes for click-to-place elements
 export const defaultSizes: Record<ElementType, { width: number; height: number }> = {
   rectangle: { width: 120, height: 80 },
-  circle: { width: 80, height: 80 },
+  circle: { width: 110, height: 110 },
   line: { width: 100, height: 0 },
   arrow: { width: 100, height: 0 },
-  polygon: { width: 80, height: 80 },
+  polygon: { width: 120, height: 120 },
   text: { width: 200, height: 40 },
   freehand: { width: 0, height: 0 },
-  triangle: { width: 80, height: 80 },
+  triangle: { width: 120, height: 120 },
   trapezoid: { width: 120, height: 80 },
-  parallelogram: { width: 120, height: 80 },
+  parallelogram: { width: 120, height: 120 },
   'smart-pin': { width: 30, height: 40 },
   'static-pin': { width: 55, height: 55 },
 };

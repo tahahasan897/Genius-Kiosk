@@ -6,14 +6,20 @@ import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
-import { ArrowUp, ArrowDown, ChevronUp, ChevronDown } from 'lucide-react';
-import type { MapElement, AnimationStyle } from './types';
+import { ArrowUp, ArrowDown, ChevronUp, ChevronDown, Eraser, Undo2 } from 'lucide-react';
+import type { MapElement, AnimationStyle, Tool } from './types';
 import { animationStyleLabels } from './types';
 
 interface PropertiesPanelProps {
   element: MapElement | null;
   elements: MapElement[]; // Full list for z-index calculations
   onUpdateElement: (id: string, updates: Partial<MapElement>) => void;
+  // Eraser props
+  activeTool?: Tool;
+  eraserSize?: number;
+  onEraserSizeChange?: (size: number) => void;
+  onClearEraserStrokes?: () => void;
+  hasEraserStrokes?: boolean;
 }
 
 const fontFamilies = [
@@ -38,7 +44,83 @@ const sizeElements = ['rectangle', 'circle', 'polygon', 'triangle', 'trapezoid',
 // Pin elements
 const pinElements = ['smart-pin', 'static-pin'];
 
-const PropertiesPanel = ({ element, elements, onUpdateElement }: PropertiesPanelProps) => {
+const PropertiesPanel = ({
+  element,
+  elements,
+  onUpdateElement,
+  activeTool,
+  eraserSize = 20,
+  onEraserSizeChange,
+  onClearEraserStrokes,
+  hasEraserStrokes = false,
+}: PropertiesPanelProps) => {
+  // Show eraser settings when eraser tool is active
+  if (activeTool === 'eraser') {
+    return (
+      <div className="h-full bg-card border-l border-border flex flex-col overflow-hidden">
+        <div className="px-4 py-3 border-b border-border flex-shrink-0">
+          <h3 className="font-semibold text-sm truncate">Eraser Settings</h3>
+          <p className="text-xs text-muted-foreground">Paint to erase parts of the background</p>
+        </div>
+
+        <ScrollArea className="flex-1">
+          <div className="p-4 space-y-5">
+            <div className="space-y-2">
+              <Label className="text-xs font-medium">Eraser Size: {eraserSize}px</Label>
+              <Slider
+                value={[eraserSize]}
+                onValueChange={([value]) => onEraserSizeChange?.(value)}
+                min={5}
+                max={100}
+                step={1}
+              />
+              <div className="flex justify-between text-[10px] text-muted-foreground">
+                <span>Small</span>
+                <span>Large</span>
+              </div>
+            </div>
+
+            {/* Eraser Preview */}
+            <div className="space-y-2">
+              <Label className="text-xs font-medium">Preview</Label>
+              <div className="w-full h-24 bg-muted/30 rounded-lg flex items-center justify-center border border-border">
+                <div
+                  className="rounded-full bg-white border-2 border-gray-300 shadow-sm"
+                  style={{ width: eraserSize, height: eraserSize }}
+                />
+              </div>
+            </div>
+
+            <Separator />
+
+            {/* Clear all eraser strokes */}
+            {hasEraserStrokes && (
+              <div className="space-y-2">
+                <Label className="text-xs font-medium">Eraser Actions</Label>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={onClearEraserStrokes}
+                >
+                  <Undo2 className="h-4 w-4 mr-2" />
+                  Undo All Eraser Strokes
+                </Button>
+              </div>
+            )}
+
+            {/* Instructions */}
+            <div className="p-3 bg-muted/50 rounded-lg">
+              <p className="text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">Tip:</span> Click and drag on the background image to erase parts of it.
+              </p>
+            </div>
+          </div>
+        </ScrollArea>
+      </div>
+    );
+  }
+
   if (!element) {
     return (
       <div className="h-full bg-card border-l border-border p-4 overflow-hidden">

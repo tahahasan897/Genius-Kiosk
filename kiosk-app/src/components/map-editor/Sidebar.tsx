@@ -13,7 +13,9 @@ import {
   Hand,
   MapPin,
   Link,
-  Info
+  Info,
+  Eraser,
+  Upload
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -27,6 +29,7 @@ interface ToolbarProps {
   onToolChange: (tool: Tool) => void;
   onDeleteSelected: () => void;
   hasSelection: boolean;
+  onUploadClick: () => void;
 }
 
 // Custom icons for shapes not in lucide
@@ -94,7 +97,7 @@ const pinTools: { id: Tool; icon: React.ElementType; label: string; description:
   },
 ];
 
-const Sidebar = ({ activeTool, onToolChange, onDeleteSelected, hasSelection }: ToolbarProps) => {
+const Sidebar = ({ activeTool, onToolChange, onDeleteSelected, hasSelection, onUploadClick }: ToolbarProps) => {
 
   const handleDragStart = (e: React.DragEvent, toolType: Tool) => {
     e.dataTransfer.setData('toolType', toolType);
@@ -104,7 +107,7 @@ const Sidebar = ({ activeTool, onToolChange, onDeleteSelected, hasSelection }: T
     <div className="w-64 bg-card border-r border-border flex flex-col h-full relative z-20 flex-shrink-0">
       <div className="p-4 border-b border-border">
         <h2 className="font-semibold mb-2">Tools</h2>
-        <div className="flex gap-2">
+        <div className="flex gap-2 mb-2">
           <Button
             variant={activeTool === 'select' ? 'default' : 'outline'}
             size="sm"
@@ -124,27 +127,42 @@ const Sidebar = ({ activeTool, onToolChange, onDeleteSelected, hasSelection }: T
             Draw
           </Button>
         </div>
+        <Button
+          variant={activeTool === 'eraser' ? 'default' : 'outline'}
+          size="sm"
+          className="w-full"
+          onClick={() => onToolChange('eraser')}
+        >
+          <Eraser className="h-4 w-4 mr-2" />
+          Eraser
+        </Button>
       </div>
 
       <Tabs defaultValue="shapes" className="flex-1 flex flex-col overflow-hidden">
-        <TabsList className="w-full justify-start rounded-none border-b bg-transparent p-0">
+        <TabsList className="w-full justify-center rounded-none border-b bg-transparent p-0">
           <TabsTrigger
             value="shapes"
-            className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-3 py-2 text-sm"
+            className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-2 py-2 text-sm"
           >
             Shapes
           </TabsTrigger>
           <TabsTrigger
             value="pins"
-            className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-3 py-2 text-sm"
+            className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-2 py-2 text-sm"
           >
             Pins
           </TabsTrigger>
           <TabsTrigger
             value="text"
-            className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-3 py-2 text-sm"
+            className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-2 py-2 text-sm"
           >
             Text
+          </TabsTrigger>
+          <TabsTrigger
+            value="upload"
+            className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-2 py-2 text-sm"
+          >
+            Upload
           </TabsTrigger>
         </TabsList>
 
@@ -222,6 +240,23 @@ const Sidebar = ({ activeTool, onToolChange, onDeleteSelected, hasSelection }: T
             <Type className="h-12 w-12 mb-2" />
             <span className="font-medium">Add Text</span>
             <span className="text-xs text-muted-foreground mt-1">Drag to canvas</span>
+          </div>
+        </TabsContent>
+
+        <TabsContent value="upload" className="flex-1 p-4 m-0">
+          <div
+            onClick={onUploadClick}
+            className="flex flex-col items-center justify-center p-6 rounded-lg border border-dashed border-border cursor-pointer hover:bg-accent hover:text-accent-foreground transition-colors hover:border-primary"
+          >
+            <Upload className="h-12 w-12 mb-2" />
+            <span className="font-medium">Upload Image</span>
+            <span className="text-xs text-muted-foreground mt-1 text-center">Click to upload a floor plan or background image</span>
+          </div>
+
+          <div className="mt-4 text-xs text-muted-foreground space-y-2 p-2 bg-muted/50 rounded-lg">
+            <p className="font-medium text-foreground mb-2">Supported formats:</p>
+            <p>PNG, JPG, JPEG, GIF, WebP</p>
+            <p>Max file size: 10MB</p>
           </div>
         </TabsContent>
       </Tabs>

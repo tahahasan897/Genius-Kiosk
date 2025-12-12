@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Upload, Plus, Edit, Trash2, RefreshCw, LogOut, FileSpreadsheet, CheckCircle2, AlertCircle, Download, FileUp } from 'lucide-react';
+import { Upload, Plus, Edit, Trash2, LogOut, FileSpreadsheet, CheckCircle2, AlertCircle, Download, FileUp, Settings, RefreshCw } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -295,14 +295,16 @@ BREAD001,White Bread,Soft white sandwich bread,Bakery,2.99,3,C,25,t,https://imag
             </div>
               )}
             <Button
-              onClick={fetchProducts}
               variant="outline"
               size="lg"
-              disabled={loading}
               className="h-12"
+              onClick={() => {
+                // Settings button - currently non-functional
+                // TODO: Open settings modal/page
+              }}
             >
-              <RefreshCw className={`mr-2 h-5 w-5 ${loading ? 'animate-spin' : ''}`} />
-              Refresh
+              <Settings className="mr-2 h-5 w-5" />
+              Settings
             </Button>
             </div>
           </div>
@@ -312,11 +314,13 @@ BREAD001,White Bread,Soft white sandwich bread,Bakery,2.99,3,C,25,t,https://imag
       {/* Main Content */}
       <div className="container mx-auto px-8 py-8">
         <Tabs defaultValue="products" className="space-y-6">
-          <TabsList>
-            <TabsTrigger value="products">Products</TabsTrigger>
-            <TabsTrigger value="import">Import</TabsTrigger>
-            <TabsTrigger value="map">Store Map</TabsTrigger>
-          </TabsList>
+          <div className="flex justify-center">
+            <TabsList>
+              <TabsTrigger value="products">Products</TabsTrigger>
+              <TabsTrigger value="import">Import</TabsTrigger>
+              <TabsTrigger value="map">Store Map</TabsTrigger>
+            </TabsList>
+          </div>
 
           <TabsContent value="products" className="space-y-6">
             <Card>

@@ -2,6 +2,10 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { Upload, Trash2, Hammer, ArrowLeft, ArrowRight, ZoomIn, ZoomOut, Maximize, Grid, Eye, Send, Loader2, Monitor } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Slider } from '@/components/ui/slider';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
 import { Stage, Layer, Rect, Circle, Line, Arrow, Text as KonvaText, RegularPolygon, Transformer, Image as KonvaImage, Group } from 'react-konva';
 import Konva from 'konva';
@@ -12,9 +16,9 @@ import LayersPanel from './map-editor/LayersPanel';
 import PropertiesPanel from './map-editor/PropertiesPanel';
 import LinksPanel from './map-editor/LinksPanel';
 import PreviewModal from './map-editor/PreviewModal';
-import ContextualToolbar from './map-editor/ContextualToolbar';
-import type { MapElement, Tool, ElementType } from './map-editor/types';
-import { defaultElement, defaultSizes, defaultSmartPin, defaultStaticPin, CANVAS_WIDTH, CANVAS_HEIGHT, calculateFitToViewScale } from './map-editor/types';
+import type { MapElement, Tool, ElementType, AnimationStyle } from './map-editor/types';
+// Note: ContextualToolbar removed - properties now shown in header bar
+import { defaultElement, defaultSizes, defaultSmartPin, defaultStaticPin, CANVAS_WIDTH, CANVAS_HEIGHT, calculateFitToViewScale, animationStyleLabels } from './map-editor/types';
 
 interface MapEditorProps {
     storeId: number;
@@ -27,6 +31,22 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     const [mode, setMode] = useState<'choice' | 'builder'>('choice');
     const [mapImageUrl, setMapImageUrl] = useState<string | null>(null);
     const [mapImage, setMapImage] = useState<HTMLImageElement | null>(null);
+    const [mapImagePosition, setMapImagePosition] = useState({ x: 0, y: 0 });
+    const [mapImageSize, setMapImageSize] = useState({ width: CANVAS_WIDTH, height: CANVAS_HEIGHT });
+    const [isImageSelected, setIsImageSelected] = useState(false);
+
+    // Multiple uploaded images support
+    const [uploadedImages, setUploadedImages] = useState<Array<{
+        id: string;
+        url: string;
+        image: HTMLImageElement | null;
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    }>>([]);
+    const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
+
     const [elements, setElements] = useState<MapElement[]>([]);
     const [selectedElementIds, setSelectedElementIds] = useState<string[]>([]);
     const [tool, setTool] = useState<Tool>('select');
@@ -92,7 +112,26 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     // Animation preview state - tracks which pin to animate and trigger count
     const [animationPreview, setAnimationPreview] = useState<{ pinId: string; style: number; trigger: number } | null>(null);
 
+    // Smart guides state for alignment
+    const [smartGuides, setSmartGuides] = useState<{
+        vertical: number[];   // X positions of vertical lines
+        horizontal: number[]; // Y positions of horizontal lines
+    }>({ vertical: [], horizontal: [] });
+
+    // Eraser state
+    const [eraserSize, setEraserSize] = useState(20);
+    const [eraserStrokes, setEraserStrokes] = useState<number[][]>([]); // Array of point arrays
+    const [currentEraserStroke, setCurrentEraserStroke] = useState<number[]>([]);
+    const [isErasing, setIsErasing] = useState(false);
+    const [eraserCursorPos, setEraserCursorPos] = useState<{ x: number; y: number } | null>(null);
+    const [eraserHistory, setEraserHistory] = useState<number[][][]>([]); // History of eraser stroke states
+    const [eraserHistoryStep, setEraserHistoryStep] = useState(-1); // Current position in eraser history
+
     const transformerRef = useRef<any>(null);
+    const imageTransformerRef = useRef<any>(null);
+    const uploadedImageTransformerRef = useRef<any>(null);
+    const mapImageRef = useRef<any>(null);
+    const imageGroupRef = useRef<any>(null);
     const stageRef = useRef<any>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const elementsRef = useRef(elements);
@@ -103,6 +142,10 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     const canvasContainerRef = useRef<HTMLDivElement>(null);
     const isUndoRedoRef = useRef(false); // Track if we're in undo/redo
     const isShiftPressedRef = useRef(false); // Track Shift key for proportional resizing
+    const isCtrlCmdPressedRef = useRef(false); // Track Ctrl/Cmd key to disable smart guides
+    const eraserSizeRef = useRef(eraserSize); // Track eraser size for callbacks
+    const mapImagePositionRef = useRef(mapImagePosition); // Track image position for eraser
+    const eraserStrokesRef = useRef(eraserStrokes); // Track eraser strokes for undo
     const dragStartPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map()); // Track drag start positions
     const lineArrowDragOffsetRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 }); // Track drag offset for line/arrow anchors
     const initialLoadRef = useRef(true); // Track initial load to detect changes
@@ -117,6 +160,27 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     useEffect(() => {
         selectedElementIdsRef.current = selectedElementIds;
     }, [selectedElementIds]);
+
+    useEffect(() => {
+        eraserSizeRef.current = eraserSize;
+    }, [eraserSize]);
+
+    useEffect(() => {
+        mapImagePositionRef.current = mapImagePosition;
+    }, [mapImagePosition]);
+
+    useEffect(() => {
+        eraserStrokesRef.current = eraserStrokes;
+    }, [eraserStrokes]);
+
+    // Cache the image group when eraser strokes change (needed for composite operations)
+    useEffect(() => {
+        if (imageGroupRef.current && mapImage) {
+            // Clear cache first, then re-cache
+            imageGroupRef.current.clearCache();
+            imageGroupRef.current.cache();
+        }
+    }, [eraserStrokes, currentEraserStroke, mapImage, mapImageSize]);
 
     // Update contextual toolbar position when selection changes
     useEffect(() => {
@@ -392,17 +456,23 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         }
     }, [editingLabelId]);
 
-    // Track Shift key for proportional resizing
+    // Track Shift key for proportional resizing and Ctrl/Cmd key to disable smart guides
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             if (e.key === 'Shift') {
                 isShiftPressedRef.current = true;
+            }
+            if (e.key === 'Control' || e.key === 'Meta') {
+                isCtrlCmdPressedRef.current = true;
             }
         };
 
         const handleKeyUp = (e: KeyboardEvent) => {
             if (e.key === 'Shift') {
                 isShiftPressedRef.current = false;
+            }
+            if (e.key === 'Control' || e.key === 'Meta') {
+                isCtrlCmdPressedRef.current = false;
             }
         };
 
@@ -675,6 +745,36 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         }
     }, [selectedElementIds, namingElementId, editingTextId, elements]);
 
+    // Update image transformer when image is selected
+    useEffect(() => {
+        if (!imageTransformerRef.current || !imageGroupRef.current) return;
+
+        if (isImageSelected && mapImage) {
+            imageTransformerRef.current.nodes([imageGroupRef.current]);
+            imageTransformerRef.current.getLayer()?.batchDraw();
+        } else {
+            imageTransformerRef.current.nodes([]);
+            imageTransformerRef.current.getLayer()?.batchDraw();
+        }
+    }, [isImageSelected, mapImage]);
+
+    // Update uploaded image transformer when an uploaded image is selected
+    useEffect(() => {
+        if (!uploadedImageTransformerRef.current || !stageRef.current) return;
+
+        if (selectedImageId) {
+            const stage = stageRef.current;
+            const node = stage.findOne(`#${selectedImageId}`);
+            if (node) {
+                uploadedImageTransformerRef.current.nodes([node]);
+                uploadedImageTransformerRef.current.getLayer()?.batchDraw();
+            }
+        } else {
+            uploadedImageTransformerRef.current.nodes([]);
+            uploadedImageTransformerRef.current.getLayer()?.batchDraw();
+        }
+    }, [selectedImageId, uploadedImages]);
+
     // Track changes to elements for undo/redo
     useEffect(() => {
         // Skip if we're in the middle of undo/redo
@@ -869,6 +969,9 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             return;
         }
 
+        // Check if we're in builder mode - if so, add as additional image
+        const isAdditionalUpload = mode === 'builder';
+
         const formData = new FormData();
         formData.append('image', file);
 
@@ -885,9 +988,50 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             }
 
             const data = await response.json();
-            setMapImageUrl(data.imageUrl);
-            setMode('builder');
-            toast.success('Map image uploaded successfully');
+
+            if (isAdditionalUpload) {
+                // Add as additional image (incremental upload)
+                const newImageId = `img-${Date.now()}`;
+                const img = new Image();
+                img.crossOrigin = 'anonymous';
+                img.onload = () => {
+                    // Scale image to fit reasonably on canvas (max 400px on either dimension)
+                    const maxSize = 400;
+                    let width = img.naturalWidth;
+                    let height = img.naturalHeight;
+                    if (width > maxSize || height > maxSize) {
+                        const scale = Math.min(maxSize / width, maxSize / height);
+                        width *= scale;
+                        height *= scale;
+                    }
+
+                    setUploadedImages(prev => [...prev, {
+                        id: newImageId,
+                        url: data.imageUrl,
+                        image: img,
+                        x: 100 + (prev.length * 20), // Offset each new image
+                        y: 100 + (prev.length * 20),
+                        width,
+                        height,
+                    }]);
+                    setSelectedImageId(newImageId);
+                    setSelectedElementIds([]);
+                    setIsImageSelected(false);
+                };
+                img.src = `${API_URL}${data.imageUrl}`;
+                toast.success('Image added to canvas');
+            } else {
+                // First upload - set as main background image
+                setMapImageUrl(data.imageUrl);
+                // Clear eraser strokes and reset image position for new image
+                setEraserStrokes([]);
+                setEraserHistory([]);
+                setEraserHistoryStep(-1);
+                setMapImagePosition({ x: 0, y: 0 });
+                setMapImageSize({ width: CANVAS_WIDTH, height: CANVAS_HEIGHT });
+                setMode('builder');
+                toast.success('Map image uploaded successfully');
+            }
         } catch (error: any) {
             console.error('Upload error:', error);
             toast.error(error.message || 'Failed to upload image');
@@ -938,17 +1082,9 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             centerY = element.y + element.height / 2;
         }
 
-        // Apply zoom and position, and clamp to container bounds
-        let screenX = centerX * scale + stagePosition.x + container.scrollLeft;
-        let screenY = centerY * scale + stagePosition.y + container.scrollTop;
-
-        // Clamp to ensure the prompt stays within the visible container area
-        const padding = 120; // Account for the prompt box size
-        const containerWidth = container.offsetWidth;
-        const containerHeight = container.offsetHeight;
-
-        screenX = Math.max(padding, Math.min(screenX, containerWidth - padding));
-        screenY = Math.max(padding, Math.min(screenY, containerHeight - padding));
+        // Apply zoom and position - don't clamp to allow input to follow element exactly
+        const screenX = centerX * scale + stagePosition.x;
+        const screenY = centerY * scale + stagePosition.y;
 
         return { x: screenX, y: screenY };
     };
@@ -1278,59 +1414,87 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     };
 
     const handleStageMouseMove = (e: any) => {
-        if (!isDrawing || tool !== 'freehand') return;
+        // Handle freehand drawing
+        if (isDrawing && tool === 'freehand') {
+            const pos = getCanvasPositionFromKonvaEvent(e);
+            if (!pos) return;
+            setFreehandPoints(prev => [...prev, pos.x, pos.y]);
+            return;
+        }
 
-        // Use Layer's getRelativePointerPosition for accurate canvas coordinates
-        const pos = getCanvasPositionFromKonvaEvent(e);
-        if (!pos) return;
-
-        setFreehandPoints(prev => [...prev, pos.x, pos.y]);
+        // Handle eraser drawing (store positions relative to image)
+        if (isErasing && tool === 'eraser' && mapImage) {
+            const pos = getCanvasPositionFromKonvaEvent(e);
+            if (!pos) return;
+            const relX = pos.x - mapImagePositionRef.current.x;
+            const relY = pos.y - mapImagePositionRef.current.y;
+            setCurrentEraserStroke(prev => [...prev, relX, relY]);
+        }
     };
 
     const handleStageMouseUp = () => {
-        if (!isDrawing || tool !== 'freehand') return;
+        // Handle freehand drawing completion
+        if (isDrawing && tool === 'freehand') {
+            if (freehandPoints.length > 4) {
+                const tempId = Date.now().toString();
+                const newElement: MapElement = {
+                    id: tempId,
+                    type: 'freehand',
+                    name: 'Freehand',
+                    x: 0,
+                    y: 0,
+                    width: 0,
+                    height: 0,
+                    freehandPoints: [...freehandPoints],
+                    zIndex: elements.length,
+                    showNameOn: 'both',
+                    ...defaultElement,
+                } as MapElement;
 
-        if (freehandPoints.length > 4) {
-            const tempId = Date.now().toString();
-            const newElement: MapElement = {
-                id: tempId,
-                type: 'freehand',
-                name: 'Freehand',
-                x: 0,
-                y: 0,
-                width: 0,
-                height: 0,
-                freehandPoints: [...freehandPoints],
-                zIndex: elements.length,
-                showNameOn: 'both', // Default to both canvas and layers
-                ...defaultElement,
-            } as MapElement;
+                setElements([...elements, newElement]);
+                setSelectedElementIds([newElement.id]);
 
-            setElements([...elements, newElement]);
-            setSelectedElementIds([newElement.id]);
+                // Immediately save to database
+                (async () => {
+                    const result = await createElementInDb(newElement);
+                    if (result.success && result.dbId) {
+                        setElements(prev => prev.map(el =>
+                            el.id === tempId
+                                ? { ...el, id: result.dbId!.toString(), metadata: { ...el.metadata, frontendId: tempId } }
+                                : el
+                        ));
+                        setSelectedElementIds(prev => prev.map(id =>
+                            id === tempId ? result.dbId!.toString() : id
+                        ));
+                    }
+                })();
+            }
 
-            // Immediately save to database
-            (async () => {
-                const result = await createElementInDb(newElement);
-                if (result.success && result.dbId) {
-                    // Update the element's ID to the database ID
-                    setElements(prev => prev.map(el =>
-                        el.id === tempId
-                            ? { ...el, id: result.dbId!.toString(), metadata: { ...el.metadata, frontendId: tempId } }
-                            : el
-                    ));
-                    // Update selection to use new ID
-                    setSelectedElementIds(prev => prev.map(id =>
-                        id === tempId ? result.dbId!.toString() : id
-                    ));
-                }
-            })();
-
-            // Don't auto-switch to select mode - let user manually choose when to switch tools
+            setIsDrawing(false);
+            setFreehandPoints([]);
+            return;
         }
 
-        setIsDrawing(false);
-        setFreehandPoints([]);
+        // Handle eraser stroke completion
+        if (isErasing && tool === 'eraser') {
+            if (currentEraserStroke.length > 2) {
+                // Add the completed stroke with the eraser size
+                const newStroke = [...currentEraserStroke, eraserSizeRef.current];
+                const newStrokes = [...eraserStrokesRef.current, newStroke];
+                setEraserStrokes(newStrokes);
+
+                // Add to eraser history for undo support
+                setEraserHistory(prev => {
+                    // If we're not at the end of history, truncate future states
+                    const newHistory = prev.slice(0, eraserHistoryStep + 1);
+                    return [...newHistory, newStrokes];
+                });
+                setEraserHistoryStep(prev => prev + 1);
+                setHasUnsavedChanges(true);
+            }
+            setIsErasing(false);
+            setCurrentEraserStroke([]);
+        }
     };
 
     const getDefaultName = (type: ElementType): string => {
@@ -1524,6 +1688,22 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
 
     // Undo
     const handleUndo = useCallback(async () => {
+        // First check if there are eraser strokes to undo
+        if (eraserHistoryStep >= 0) {
+            if (eraserHistoryStep === 0) {
+                // Going back to no eraser strokes
+                setEraserStrokes([]);
+                setEraserHistoryStep(-1);
+            } else {
+                // Go back to previous eraser state
+                setEraserStrokes(eraserHistory[eraserHistoryStep - 1]);
+                setEraserHistoryStep(prev => prev - 1);
+            }
+            toast.success('Eraser stroke undone');
+            return;
+        }
+
+        // Then check element history
         if (historyStep > 0) {
             isUndoRedoRef.current = true;
             const currentElements = elementsRef.current;
@@ -1546,10 +1726,19 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         } else {
             toast.error('Nothing to undo');
         }
-    }, [historyStep, history, syncDatabaseWithState, fetchPublishStatus]);
+    }, [historyStep, history, eraserHistoryStep, eraserHistory, syncDatabaseWithState, fetchPublishStatus]);
 
     // Redo
     const handleRedo = useCallback(async () => {
+        // First check if there are eraser strokes to redo
+        if (eraserHistoryStep < eraserHistory.length - 1) {
+            setEraserStrokes(eraserHistory[eraserHistoryStep + 1]);
+            setEraserHistoryStep(prev => prev + 1);
+            toast.success('Eraser stroke redone');
+            return;
+        }
+
+        // Then check element history
         if (historyStep < history.length - 1) {
             isUndoRedoRef.current = true;
             const currentElements = elementsRef.current;
@@ -1572,7 +1761,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         } else {
             toast.error('Nothing to redo');
         }
-    }, [historyStep, history, syncDatabaseWithState, fetchPublishStatus]);
+    }, [historyStep, history, eraserHistoryStep, eraserHistory, syncDatabaseWithState, fetchPublishStatus]);
 
     // Cut (copy + delete)
     const handleCut = useCallback(() => {
@@ -1817,13 +2006,23 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     break;
                 case 'delete':
                 case 'backspace':
-                    if (selectedElementIds.length > 0 && !editingTextId && !namingElementId && !editingLabelId) {
-                        // Delete all selected elements
-                        selectedElementIds.forEach(id => handleDeleteElement(id));
+                    if (!editingTextId && !namingElementId && !editingLabelId) {
+                        if (selectedElementIds.length > 0) {
+                            // Delete all selected elements
+                            selectedElementIds.forEach(id => handleDeleteElement(id));
+                        } else if (selectedImageId) {
+                            // Delete selected uploaded image
+                            setUploadedImages(prev => prev.filter(img => img.id !== selectedImageId));
+                            setSelectedImageId(null);
+                            setHasUnsavedChanges(true);
+                            toast.success('Image deleted');
+                        }
                     }
                     break;
                 case 'escape':
                     setSelectedElementIds([]);
+                    setSelectedImageId(null);
+                    setIsImageSelected(false);
                     setEditingTextId(null);
                     setNamingElementId(null);
                     setEditingLabelId(null);
@@ -1882,6 +2081,12 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             setMapImage(null);
             setElements([]);
             setSelectedElementIds([]);
+            // Clear eraser strokes and reset image position
+            setEraserStrokes([]);
+            setEraserHistory([]);
+            setEraserHistoryStep(-1);
+            setMapImagePosition({ x: 0, y: 0 });
+            setMapImageSize({ width: CANVAS_WIDTH, height: CANVAS_HEIGHT });
             setMode('choice');
             toast.success('Map deleted successfully');
         } catch (error: any) {
@@ -1990,6 +2195,240 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         return { size, radius };
     };
 
+    // Helper to get element bounds based on element type
+    const getElementBounds = (element: MapElement, x: number, y: number) => {
+        const isCentered = ['circle', 'polygon', 'triangle'].includes(element.type);
+        const isPin = ['smart-pin', 'static-pin'].includes(element.type);
+
+        if (isCentered) {
+            // For centered elements, (x, y) is the center
+            const halfW = element.width / 2;
+            const halfH = element.height / 2;
+            return {
+                left: x - halfW,
+                right: x + halfW,
+                top: y - halfH,
+                bottom: y + halfH,
+                centerX: x,
+                centerY: y,
+            };
+        } else if (isPin) {
+            // For pins, (x, y) is the bottom tip, element extends upward
+            const halfW = element.width / 2;
+            return {
+                left: x - halfW,
+                right: x + halfW,
+                top: y - element.height,
+                bottom: y,
+                centerX: x,
+                centerY: y - element.height / 2,
+            };
+        } else {
+            // For corner-based elements (rectangle, text, etc.), (x, y) is top-left
+            return {
+                left: x,
+                right: x + element.width,
+                top: y,
+                bottom: y + element.height,
+                centerX: x + element.width / 2,
+                centerY: y + element.height / 2,
+            };
+        }
+    };
+
+    // Helper to convert snap position back to element (x, y) based on type
+    const snapToElementPosition = (
+        element: MapElement,
+        snapX: number | null,
+        snapY: number | null,
+        snapType: { x: 'left' | 'right' | 'center' | null; y: 'top' | 'bottom' | 'center' | null }
+    ) => {
+        const isCentered = ['circle', 'polygon', 'triangle'].includes(element.type);
+        const isPin = ['smart-pin', 'static-pin'].includes(element.type);
+
+        let resultX = snapX;
+        let resultY = snapY;
+
+        if (snapX !== null && snapType.x) {
+            if (isCentered) {
+                if (snapType.x === 'left') resultX = snapX + element.width / 2;
+                else if (snapType.x === 'right') resultX = snapX - element.width / 2;
+                // center stays as is
+            } else if (isPin) {
+                if (snapType.x === 'left') resultX = snapX + element.width / 2;
+                else if (snapType.x === 'right') resultX = snapX - element.width / 2;
+                // center stays as is
+            } else {
+                // Corner-based: snapX is left edge position
+                if (snapType.x === 'left') resultX = snapX;
+                else if (snapType.x === 'right') resultX = snapX - element.width;
+                else if (snapType.x === 'center') resultX = snapX - element.width / 2;
+            }
+        }
+
+        if (snapY !== null && snapType.y) {
+            if (isCentered) {
+                if (snapType.y === 'top') resultY = snapY + element.height / 2;
+                else if (snapType.y === 'bottom') resultY = snapY - element.height / 2;
+                // center stays as is
+            } else if (isPin) {
+                // Pin's y is at the bottom tip
+                if (snapType.y === 'top') resultY = snapY + element.height;
+                else if (snapType.y === 'bottom') resultY = snapY;
+                else if (snapType.y === 'center') resultY = snapY + element.height / 2;
+            } else {
+                // Corner-based: snapY is top edge position
+                if (snapType.y === 'top') resultY = snapY;
+                else if (snapType.y === 'bottom') resultY = snapY - element.height;
+                else if (snapType.y === 'center') resultY = snapY - element.height / 2;
+            }
+        }
+
+        return { x: resultX, y: resultY };
+    };
+
+    // Smart guides helper - calculates alignment guides and snap position
+    const SNAP_THRESHOLD = 20; // pixels - magnetic snap like Canva
+    const calculateSmartGuides = useCallback((
+        draggedElement: MapElement,
+        currentX: number,
+        currentY: number,
+        otherElements: MapElement[]
+    ): {
+        snapX: number | null;
+        snapY: number | null;
+        guides: { vertical: number[]; horizontal: number[] }
+    } => {
+        // If Ctrl/Cmd is pressed, disable smart guides
+        if (isCtrlCmdPressedRef.current) {
+            return { snapX: null, snapY: null, guides: { vertical: [], horizontal: [] } };
+        }
+
+        const guides: { vertical: number[]; horizontal: number[] } = { vertical: [], horizontal: [] };
+
+        // Track best snap candidates (closest to threshold)
+        let bestSnapX: { value: number; distance: number; type: 'left' | 'right' | 'center'; guide: number } | null = null;
+        let bestSnapY: { value: number; distance: number; type: 'top' | 'bottom' | 'center'; guide: number } | null = null;
+
+        // Get the dragged element bounds
+        const dragged = getElementBounds(draggedElement, currentX, currentY);
+
+        // Helper to check and update best snap
+        const checkSnapX = (draggedEdge: number, targetEdge: number, type: 'left' | 'right' | 'center', guidePos: number) => {
+            const distance = Math.abs(draggedEdge - targetEdge);
+            if (distance < SNAP_THRESHOLD) {
+                if (!bestSnapX || distance < bestSnapX.distance) {
+                    bestSnapX = { value: targetEdge, distance, type, guide: guidePos };
+                }
+                guides.vertical.push(guidePos);
+            }
+        };
+
+        const checkSnapY = (draggedEdge: number, targetEdge: number, type: 'top' | 'bottom' | 'center', guidePos: number) => {
+            const distance = Math.abs(draggedEdge - targetEdge);
+            if (distance < SNAP_THRESHOLD) {
+                if (!bestSnapY || distance < bestSnapY.distance) {
+                    bestSnapY = { value: targetEdge, distance, type, guide: guidePos };
+                }
+                guides.horizontal.push(guidePos);
+            }
+        };
+
+        // Check canvas edges
+        // Left edge of canvas
+        checkSnapX(dragged.left, 0, 'left', 0);
+        checkSnapX(dragged.right, 0, 'right', 0);
+        checkSnapX(dragged.centerX, 0, 'center', 0);
+
+        // Center of canvas
+        checkSnapX(dragged.left, CANVAS_WIDTH / 2, 'left', CANVAS_WIDTH / 2);
+        checkSnapX(dragged.right, CANVAS_WIDTH / 2, 'right', CANVAS_WIDTH / 2);
+        checkSnapX(dragged.centerX, CANVAS_WIDTH / 2, 'center', CANVAS_WIDTH / 2);
+
+        // Right edge of canvas
+        checkSnapX(dragged.left, CANVAS_WIDTH, 'left', CANVAS_WIDTH);
+        checkSnapX(dragged.right, CANVAS_WIDTH, 'right', CANVAS_WIDTH);
+        checkSnapX(dragged.centerX, CANVAS_WIDTH, 'center', CANVAS_WIDTH);
+
+        // Top edge of canvas
+        checkSnapY(dragged.top, 0, 'top', 0);
+        checkSnapY(dragged.bottom, 0, 'bottom', 0);
+        checkSnapY(dragged.centerY, 0, 'center', 0);
+
+        // Center of canvas
+        checkSnapY(dragged.top, CANVAS_HEIGHT / 2, 'top', CANVAS_HEIGHT / 2);
+        checkSnapY(dragged.bottom, CANVAS_HEIGHT / 2, 'bottom', CANVAS_HEIGHT / 2);
+        checkSnapY(dragged.centerY, CANVAS_HEIGHT / 2, 'center', CANVAS_HEIGHT / 2);
+
+        // Bottom edge of canvas
+        checkSnapY(dragged.top, CANVAS_HEIGHT, 'top', CANVAS_HEIGHT);
+        checkSnapY(dragged.bottom, CANVAS_HEIGHT, 'bottom', CANVAS_HEIGHT);
+        checkSnapY(dragged.centerY, CANVAS_HEIGHT, 'center', CANVAS_HEIGHT);
+
+        // Check against other elements
+        for (const other of otherElements) {
+            if (other.id === draggedElement.id || other.visible === false) continue;
+
+            const otherBounds = getElementBounds(other, other.x, other.y);
+
+            // Vertical alignment (X axis) - check all edge combinations
+            // Left edges align
+            checkSnapX(dragged.left, otherBounds.left, 'left', otherBounds.left);
+            // Right edges align
+            checkSnapX(dragged.right, otherBounds.right, 'right', otherBounds.right);
+            // Centers align
+            checkSnapX(dragged.centerX, otherBounds.centerX, 'center', otherBounds.centerX);
+            // Left to right (dragged left touches other right)
+            checkSnapX(dragged.left, otherBounds.right, 'left', otherBounds.right);
+            // Right to left (dragged right touches other left)
+            checkSnapX(dragged.right, otherBounds.left, 'right', otherBounds.left);
+
+            // Horizontal alignment (Y axis) - check all edge combinations
+            // Top edges align
+            checkSnapY(dragged.top, otherBounds.top, 'top', otherBounds.top);
+            // Bottom edges align
+            checkSnapY(dragged.bottom, otherBounds.bottom, 'bottom', otherBounds.bottom);
+            // Centers align
+            checkSnapY(dragged.centerY, otherBounds.centerY, 'center', otherBounds.centerY);
+            // Top to bottom (dragged top touches other bottom)
+            checkSnapY(dragged.top, otherBounds.bottom, 'top', otherBounds.bottom);
+            // Bottom to top (dragged bottom touches other top)
+            checkSnapY(dragged.bottom, otherBounds.top, 'bottom', otherBounds.top);
+        }
+
+        // Remove duplicates from guides
+        guides.vertical = [...new Set(guides.vertical)];
+        guides.horizontal = [...new Set(guides.horizontal)];
+
+        // Calculate final snap position
+        let snapX: number | null = null;
+        let snapY: number | null = null;
+
+        if (bestSnapX) {
+            // Convert the snap position back to element x coordinate
+            const result = snapToElementPosition(
+                draggedElement,
+                bestSnapX.value,
+                null,
+                { x: bestSnapX.type, y: null }
+            );
+            snapX = result.x;
+        }
+
+        if (bestSnapY) {
+            // Convert the snap position back to element y coordinate
+            const result = snapToElementPosition(
+                draggedElement,
+                null,
+                bestSnapY.value,
+                { x: null, y: bestSnapY.type }
+            );
+            snapY = result.y;
+        }
+
+        return { snapX, snapY, guides };
+    }, []);
+
     // Render element
     const renderElement = (element: MapElement) => {
         if (!element.visible) return null;
@@ -2002,6 +2441,11 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             rotation: element.rotation,
             draggable: !element.locked && tool === 'select',
             onClick: () => {
+                if (tool === 'eraser') {
+                    // Eraser tool - delete the element
+                    handleDeleteElement(element.id);
+                    return;
+                }
                 if (tool === 'select') {
                     // Use ref to get latest selection (avoid stale closure)
                     const currentlySelected = selectedElementIdsRef.current.includes(element.id);
@@ -2009,16 +2453,25 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     // Otherwise, select only this element
                     if (!currentlySelected) {
                         setSelectedElementIds([element.id]);
+                        setIsImageSelected(false);
+                        setSelectedImageId(null);
                     }
                 }
             },
             onTap: () => {
+                if (tool === 'eraser') {
+                    // Eraser tool - delete the element
+                    handleDeleteElement(element.id);
+                    return;
+                }
                 if (tool === 'select') {
                     // Use ref to get latest selection (avoid stale closure)
                     const currentlySelected = selectedElementIdsRef.current.includes(element.id);
                     // Same logic for touch
                     if (!currentlySelected) {
                         setSelectedElementIds([element.id]);
+                        setIsImageSelected(false);
+                        setSelectedImageId(null);
                     }
                 }
             },
@@ -2031,6 +2484,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 // If dragging a selected element, keep all selected (for group drag)
                 if (!currentlySelected) {
                     setSelectedElementIds([element.id]);
+                    setIsImageSelected(false);
+                    setSelectedImageId(null);
                 }
 
                 // Store the starting positions of all selected elements for group drag
@@ -2082,6 +2537,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 if (!currentEl) return;
 
                 let toolbarX: number, toolbarY: number;
+                let currentX = node.x();
+                let currentY = node.y();
 
                 if (currentEl.type === 'line' || currentEl.type === 'arrow') {
                     // For lines/arrows, calculate center from points + current drag offset
@@ -2092,6 +2549,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     toolbarY = Math.min(points[1], points[3]) + dragOffsetY;
                     // Update drag offset ref so anchor circles can follow
                     lineArrowDragOffsetRef.current = { x: dragOffsetX, y: dragOffsetY };
+                    // Clear guides for line-based elements
+                    setSmartGuides({ vertical: [], horizontal: [] });
                 } else if (currentEl.type === 'freehand') {
                     // For freehand, use current node position
                     const points = currentEl.freehandPoints || [];
@@ -2101,22 +2560,50 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     const avgX = points.length > 1 ? points.filter((_, i) => i % 2 === 0).reduce((a, b) => a + b, 0) / (points.length / 2) : currentEl.x;
                     toolbarX = avgX + dragOffsetX;
                     toolbarY = minY + dragOffsetY;
-                } else if (currentEl.type === 'smart-pin') {
-                    // For smart pins, calculate toolbar position at top of pin during drag
-                    const pinSize = Math.max(currentEl.width, currentEl.height) * 1.2;
-                    const pinRadius = pinSize * 0.4;
-                    toolbarX = node.x();
-                    toolbarY = node.y() - pinRadius - pinRadius * 0.2 - pinRadius;
-                } else if (currentEl.type === 'static-pin') {
-                    // For static pins, calculate toolbar position at top of pin during drag
-                    const staticPinHeight = (currentEl.height || 55) * 0.7;
-                    const staticPointerHeight = (currentEl.height || 55) * 0.3;
-                    toolbarX = node.x();
-                    toolbarY = node.y() - staticPinHeight - staticPointerHeight;
+                    // Clear guides for freehand
+                    setSmartGuides({ vertical: [], horizontal: [] });
                 } else {
-                    // For regular shapes, use node's current position
-                    toolbarX = node.x() + currentEl.width / 2;
-                    toolbarY = node.y();
+                    // For regular shapes, calculate smart guides and apply magnetic snapping
+                    const { snapX, snapY, guides } = calculateSmartGuides(
+                        currentEl,
+                        currentX,
+                        currentY,
+                        elementsRef.current
+                    );
+
+                    // Apply magnetic snapping during drag (like Canva)
+                    let snappedX = currentX;
+                    let snappedY = currentY;
+
+                    if (snapX !== null) {
+                        snappedX = snapX;
+                        node.x(snapX);
+                    }
+                    if (snapY !== null) {
+                        snappedY = snapY;
+                        node.y(snapY);
+                    }
+
+                    // Show guides during drag
+                    setSmartGuides(guides);
+
+                    if (currentEl.type === 'smart-pin') {
+                        // For smart pins, calculate toolbar position at top of pin during drag
+                        const pinSize = Math.max(currentEl.width, currentEl.height) * 1.2;
+                        const pinRadius = pinSize * 0.4;
+                        toolbarX = snappedX;
+                        toolbarY = snappedY - pinRadius - pinRadius * 0.2 - pinRadius;
+                    } else if (currentEl.type === 'static-pin') {
+                        // For static pins, calculate toolbar position at top of pin during drag
+                        const staticPinHeight = (currentEl.height || 55) * 0.7;
+                        const staticPointerHeight = (currentEl.height || 55) * 0.3;
+                        toolbarX = snappedX;
+                        toolbarY = snappedY - staticPinHeight - staticPointerHeight;
+                    } else {
+                        // For regular shapes, use snapped position
+                        toolbarX = snappedX + currentEl.width / 2;
+                        toolbarY = snappedY;
+                    }
                 }
 
                 setToolbarPosition({ x: toolbarX, y: toolbarY });
@@ -2229,15 +2716,34 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                         e.target.x(0);
                         e.target.y(0);
                     } else {
+                        // For regular shapes, apply smart guides snapping on drag end
+                        let finalX = startPos.x + deltaX;
+                        let finalY = startPos.y + deltaY;
+
+                        // Calculate snap position (only if Ctrl/Cmd is not pressed)
+                        if (!isCtrlCmdPressedRef.current) {
+                            const { snapX, snapY } = calculateSmartGuides(
+                                currentElement,
+                                finalX,
+                                finalY,
+                                elementsRef.current
+                            );
+                            if (snapX !== null) finalX = snapX;
+                            if (snapY !== null) finalY = snapY;
+                        }
+
                         updateElement(currentElement.id, {
-                            x: startPos.x + deltaX,
-                            y: startPos.y + deltaY,
+                            x: finalX,
+                            y: finalY,
                         });
                     }
                 }
 
                 // Clear drag start positions
                 dragStartPositionsRef.current.clear();
+
+                // Clear smart guides
+                setSmartGuides({ vertical: [], horizontal: [] });
             },
             onTransformEnd: (e: any) => {
                 const node = e.target;
@@ -2716,6 +3222,16 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
 
     return (
         <div className="h-[calc(100vh-12rem)] flex flex-col border rounded-lg overflow-hidden bg-background">
+            {/* Hidden file input for uploading images from sidebar */}
+            <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleImageUpload}
+                disabled={uploading}
+            />
+
             {/* Top Bar */}
             <div className="h-14 border-b border-border flex items-center justify-between px-4 bg-card">
                 <div className="flex items-center gap-2">
@@ -2729,6 +3245,188 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     <div className="h-4 w-px bg-border mx-2" />
                     <h2 className="font-semibold">Map Editor</h2>
                 </div>
+
+                {/* Header Toolbar - Shows element properties when selected */}
+                {selectedElement && (
+                    <div className="flex-1 flex items-center justify-center gap-2 px-4">
+                        {/* Fill Color */}
+                        <div className="flex items-center gap-1">
+                            <span className="text-xs text-muted-foreground">Fill:</span>
+                            <Popover>
+                                <PopoverTrigger asChild>
+                                    <Button variant="outline" size="sm" className="h-8 w-8 p-0">
+                                        <div
+                                            className="w-5 h-5 rounded border border-border"
+                                            style={{ backgroundColor: selectedElement.fillColor }}
+                                        />
+                                    </Button>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-auto p-3" side="bottom">
+                                    <div className="space-y-2">
+                                        <label className="text-xs font-medium">Fill Color</label>
+                                        <Input
+                                            type="color"
+                                            value={selectedElement.fillColor}
+                                            onChange={(e) => updateElement(selectedElement.id, { fillColor: e.target.value })}
+                                            className="w-24 h-8 cursor-pointer"
+                                        />
+                                    </div>
+                                </PopoverContent>
+                            </Popover>
+                        </div>
+
+                        {/* Stroke Color - only for shapes */}
+                        {selectedElement.type !== 'text' && selectedElement.type !== 'smart-pin' && selectedElement.type !== 'static-pin' && (
+                            <div className="flex items-center gap-1">
+                                <span className="text-xs text-muted-foreground">Stroke:</span>
+                                <Popover>
+                                    <PopoverTrigger asChild>
+                                        <Button variant="outline" size="sm" className="h-8 w-8 p-0">
+                                            <div
+                                                className="w-5 h-5 rounded border-2"
+                                                style={{ borderColor: selectedElement.strokeColor, backgroundColor: 'transparent' }}
+                                            />
+                                        </Button>
+                                    </PopoverTrigger>
+                                    <PopoverContent className="w-auto p-3" side="bottom">
+                                        <div className="space-y-2">
+                                            <label className="text-xs font-medium">Stroke Color</label>
+                                            <Input
+                                                type="color"
+                                                value={selectedElement.strokeColor}
+                                                onChange={(e) => updateElement(selectedElement.id, { strokeColor: e.target.value })}
+                                                className="w-24 h-8 cursor-pointer"
+                                            />
+                                        </div>
+                                    </PopoverContent>
+                                </Popover>
+                            </div>
+                        )}
+
+                        {/* Stroke Width - for lines/arrows */}
+                        {(selectedElement.type === 'line' || selectedElement.type === 'arrow' || selectedElement.type === 'freehand') && (
+                            <div className="flex items-center gap-1">
+                                <span className="text-xs text-muted-foreground">Width:</span>
+                                <Popover>
+                                    <PopoverTrigger asChild>
+                                        <Button variant="outline" size="sm" className="h-8 px-2 text-xs">
+                                            {selectedElement.strokeWidth || 2}px
+                                        </Button>
+                                    </PopoverTrigger>
+                                    <PopoverContent className="w-40 p-3" side="bottom">
+                                        <div className="space-y-2">
+                                            <label className="text-xs font-medium">
+                                                Width: {selectedElement.strokeWidth || 2}px
+                                            </label>
+                                            <Slider
+                                                value={[selectedElement.strokeWidth || 2]}
+                                                onValueChange={([value]) => updateElement(selectedElement.id, { strokeWidth: value })}
+                                                min={1}
+                                                max={20}
+                                                step={1}
+                                            />
+                                        </div>
+                                    </PopoverContent>
+                                </Popover>
+                            </div>
+                        )}
+
+                        {/* Corner Radius - for shapes */}
+                        {['rectangle', 'trapezoid', 'parallelogram'].includes(selectedElement.type) && (
+                            <div className="flex items-center gap-1">
+                                <span className="text-xs text-muted-foreground">Radius:</span>
+                                <Popover>
+                                    <PopoverTrigger asChild>
+                                        <Button variant="outline" size="sm" className="h-8 px-2 text-xs">
+                                            {selectedElement.cornerRadius || 0}px
+                                        </Button>
+                                    </PopoverTrigger>
+                                    <PopoverContent className="w-40 p-3" side="bottom">
+                                        <div className="space-y-2">
+                                            <label className="text-xs font-medium">
+                                                Radius: {selectedElement.cornerRadius || 0}px
+                                            </label>
+                                            <Slider
+                                                value={[selectedElement.cornerRadius || 0]}
+                                                onValueChange={([value]) => updateElement(selectedElement.id, { cornerRadius: value })}
+                                                min={0}
+                                                max={50}
+                                                step={1}
+                                            />
+                                        </div>
+                                    </PopoverContent>
+                                </Popover>
+                            </div>
+                        )}
+
+                        {/* Font Size - for text */}
+                        {selectedElement.type === 'text' && (
+                            <div className="flex items-center gap-1">
+                                <span className="text-xs text-muted-foreground">Size:</span>
+                                <Select
+                                    value={String(selectedElement.fontSize || 24)}
+                                    onValueChange={(v) => updateElement(selectedElement.id, { fontSize: Number(v) })}
+                                >
+                                    <SelectTrigger className="h-8 w-16 text-xs">
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {[12, 14, 16, 18, 24, 32, 48, 64, 72, 96].map(size => (
+                                            <SelectItem key={size} value={String(size)}>{size}px</SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                        )}
+
+                        {/* Bold toggle - for text */}
+                        {selectedElement.type === 'text' && (
+                            <Button
+                                variant={selectedElement.fontWeight === 'bold' ? 'secondary' : 'outline'}
+                                size="sm"
+                                className="h-8 w-8 font-bold"
+                                onClick={() => updateElement(selectedElement.id, {
+                                    fontWeight: selectedElement.fontWeight === 'bold' ? 'normal' : 'bold'
+                                })}
+                            >
+                                B
+                            </Button>
+                        )}
+
+                        {/* Animation - for pins */}
+                        {(selectedElement.type === 'smart-pin' || selectedElement.type === 'static-pin') && (
+                            <div className="flex items-center gap-1">
+                                <span className="text-xs text-muted-foreground">Animation:</span>
+                                <Select
+                                    value={String(selectedElement.animationStyle ?? 0)}
+                                    onValueChange={(v) => updateElement(selectedElement.id, { animationStyle: Number(v) as AnimationStyle })}
+                                >
+                                    <SelectTrigger className="h-8 w-28 text-xs">
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {Object.entries(animationStyleLabels).map(([value, label]) => (
+                                            <SelectItem key={value} value={value}>{label}</SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                        )}
+
+                        {/* Separator */}
+                        <div className="w-px h-6 bg-border mx-1" />
+
+                        {/* Delete */}
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+                            onClick={() => handleDeleteElement(selectedElement.id)}
+                        >
+                            <Trash2 className="h-4 w-4" />
+                        </Button>
+                    </div>
+                )}
 
                 <div className="flex items-center gap-2">
                     <Button
@@ -2786,6 +3484,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     onToolChange={setTool}
                     onDeleteSelected={() => selectedElementIds.length > 0 && selectedElementIds.forEach(id => handleDeleteElement(id))}
                     hasSelection={selectedElementIds.length > 0}
+                    onUploadClick={() => fileInputRef.current?.click()}
                 />
 
                 {/* Center - Canvas */}
@@ -2827,17 +3526,6 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                         </div>
                     )}
 
-                    {/* Contextual Toolbar - appears above selected element */}
-                    <ContextualToolbar
-                        element={selectedElement}
-                        position={toolbarPosition}
-                        scale={scale}
-                        stagePosition={stagePosition}
-                        canvasContainerRef={canvasContainerRef}
-                        onUpdateElement={updateElement}
-                        onDeleteElement={handleDeleteElement}
-                    />
-
                     <Stage
                         width={CANVAS_WIDTH}
                         height={CANVAS_HEIGHT}
@@ -2857,16 +3545,30 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                 const target = e.target;
                                 const stage = target.getStage();
 
-                                // Consider it empty if clicking on Stage, Layer, or background elements (grid, image)
+                                // Consider it empty if clicking on Stage, Layer, or grid (not background image - it's selectable now)
                                 const clickedOnEmpty =
                                     target === stage ||
                                     target.getType() === 'Layer' ||
-                                    target.name() === 'background-image' ||
                                     target.name() === 'grid-line';
+
+                                // Handle eraser tool - start erasing on background image
+                                if (tool === 'eraser' && mapImage) {
+                                    const pos = getCanvasPositionFromKonvaEvent(e);
+                                    if (pos) {
+                                        // Store position relative to image (so eraser moves with image)
+                                        const relX = pos.x - mapImagePositionRef.current.x;
+                                        const relY = pos.y - mapImagePositionRef.current.y;
+                                        setIsErasing(true);
+                                        setCurrentEraserStroke([relX, relY]);
+                                    }
+                                    return;
+                                }
 
                                 if (clickedOnEmpty && tool === 'select') {
                                     // Clear any existing selection when starting a new selection box
                                     setSelectedElementIds([]);
+                                    setIsImageSelected(false);
+                                    setSelectedImageId(null);
 
                                     // Start selection box - use Layer's getRelativePointerPosition
                                     const pos = getCanvasPositionFromKonvaEvent(e);
@@ -2885,6 +3587,16 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             }
                         }}
                         onMouseMove={(e) => {
+                            // Track eraser cursor position
+                            if (tool === 'eraser') {
+                                const pos = getCanvasPositionFromKonvaEvent(e);
+                                if (pos) {
+                                    setEraserCursorPos({ x: pos.x, y: pos.y });
+                                }
+                            } else {
+                                setEraserCursorPos(null);
+                            }
+
                             if (isRightMouseDown) {
                                 // Pan the canvas
                                 const stage = e.target.getStage();
@@ -3004,38 +3716,10 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             width: CANVAS_WIDTH,
                             height: CANVAS_HEIGHT,
                             background: '#ffffff',
-                            cursor: isRightMouseDown ? 'grabbing' : 'default'
+                            cursor: isRightMouseDown ? 'grabbing' : tool === 'eraser' ? 'none' : 'default'
                         }}
                     >
                         <Layer>
-                            {/* Grid lines */}
-                            {showGrid && (
-                                <Group name="grid-group" listening={false}>
-                                    {/* Vertical grid lines */}
-                                    {Array.from({ length: Math.ceil(CANVAS_WIDTH / 50) + 1 }).map((_, i) => (
-                                        <Line
-                                            key={`v-${i}`}
-                                            name="grid-line"
-                                            points={[i * 50, 0, i * 50, CANVAS_HEIGHT]}
-                                            stroke="#9ca3af"
-                                            strokeWidth={0.75}
-                                            listening={false}
-                                        />
-                                    ))}
-                                    {/* Horizontal grid lines */}
-                                    {Array.from({ length: Math.ceil(CANVAS_HEIGHT / 50) + 1 }).map((_, i) => (
-                                        <Line
-                                            key={`h-${i}`}
-                                            name="grid-line"
-                                            points={[0, i * 50, CANVAS_WIDTH, i * 50]}
-                                            stroke="#9ca3af"
-                                            strokeWidth={0.75}
-                                            listening={false}
-                                        />
-                                    ))}
-                                </Group>
-                            )}
-
                             {/* Capture Area Boundary - only shown when toggled */}
                             {showCaptureArea && (
                                 <Group name="capture-area-group" listening={false}>
@@ -3060,14 +3744,387 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                 </Group>
                             )}
 
-                            {/* Background Image */}
+                            {/* Background Image with Eraser - Cached Group for composite operations */}
                             {mapImage && (
+                                <Group
+                                    ref={imageGroupRef}
+                                    name="background-image-group"
+                                    x={mapImagePosition.x}
+                                    y={mapImagePosition.y}
+                                    draggable={tool === 'select'}
+                                    onClick={(e) => {
+                                        if (tool === 'select') {
+                                            e.cancelBubble = true;
+                                            setIsImageSelected(true);
+                                            setSelectedElementIds([]);
+                                            setSelectedImageId(null);
+                                        }
+                                    }}
+                                    onTap={(e) => {
+                                        if (tool === 'select') {
+                                            e.cancelBubble = true;
+                                            setIsImageSelected(true);
+                                            setSelectedElementIds([]);
+                                            setSelectedImageId(null);
+                                        }
+                                    }}
+                                    onDragMove={(e) => {
+                                        // Smart guides for image (like Canva)
+                                        if (isCtrlCmdPressedRef.current) {
+                                            setSmartGuides({ vertical: [], horizontal: [] });
+                                            return;
+                                        }
+
+                                        const node = e.target;
+                                        const currentX = node.x();
+                                        const currentY = node.y();
+                                        const imgWidth = mapImageSize.width;
+                                        const imgHeight = mapImageSize.height;
+
+                                        // Image bounds (corner-based: x,y is top-left)
+                                        const imgLeft = currentX;
+                                        const imgRight = currentX + imgWidth;
+                                        const imgTop = currentY;
+                                        const imgBottom = currentY + imgHeight;
+                                        const imgCenterX = currentX + imgWidth / 2;
+                                        const imgCenterY = currentY + imgHeight / 2;
+
+                                        const guides: { vertical: number[]; horizontal: number[] } = { vertical: [], horizontal: [] };
+                                        let bestSnapX: { value: number; distance: number; type: 'left' | 'right' | 'center' } | null = null;
+                                        let bestSnapY: { value: number; distance: number; type: 'top' | 'bottom' | 'center' } | null = null;
+
+                                        const checkSnapX = (edge: number, target: number, type: 'left' | 'right' | 'center', guide: number) => {
+                                            const dist = Math.abs(edge - target);
+                                            if (dist < SNAP_THRESHOLD) {
+                                                if (!bestSnapX || dist < bestSnapX.distance) {
+                                                    bestSnapX = { value: target, distance: dist, type };
+                                                }
+                                                guides.vertical.push(guide);
+                                            }
+                                        };
+
+                                        const checkSnapY = (edge: number, target: number, type: 'top' | 'bottom' | 'center', guide: number) => {
+                                            const dist = Math.abs(edge - target);
+                                            if (dist < SNAP_THRESHOLD) {
+                                                if (!bestSnapY || dist < bestSnapY.distance) {
+                                                    bestSnapY = { value: target, distance: dist, type };
+                                                }
+                                                guides.horizontal.push(guide);
+                                            }
+                                        };
+
+                                        // Check canvas edges
+                                        checkSnapX(imgLeft, 0, 'left', 0);
+                                        checkSnapX(imgRight, 0, 'right', 0);
+                                        checkSnapX(imgCenterX, 0, 'center', 0);
+                                        checkSnapX(imgLeft, CANVAS_WIDTH / 2, 'left', CANVAS_WIDTH / 2);
+                                        checkSnapX(imgRight, CANVAS_WIDTH / 2, 'right', CANVAS_WIDTH / 2);
+                                        checkSnapX(imgCenterX, CANVAS_WIDTH / 2, 'center', CANVAS_WIDTH / 2);
+                                        checkSnapX(imgLeft, CANVAS_WIDTH, 'left', CANVAS_WIDTH);
+                                        checkSnapX(imgRight, CANVAS_WIDTH, 'right', CANVAS_WIDTH);
+                                        checkSnapX(imgCenterX, CANVAS_WIDTH, 'center', CANVAS_WIDTH);
+
+                                        checkSnapY(imgTop, 0, 'top', 0);
+                                        checkSnapY(imgBottom, 0, 'bottom', 0);
+                                        checkSnapY(imgCenterY, 0, 'center', 0);
+                                        checkSnapY(imgTop, CANVAS_HEIGHT / 2, 'top', CANVAS_HEIGHT / 2);
+                                        checkSnapY(imgBottom, CANVAS_HEIGHT / 2, 'bottom', CANVAS_HEIGHT / 2);
+                                        checkSnapY(imgCenterY, CANVAS_HEIGHT / 2, 'center', CANVAS_HEIGHT / 2);
+                                        checkSnapY(imgTop, CANVAS_HEIGHT, 'top', CANVAS_HEIGHT);
+                                        checkSnapY(imgBottom, CANVAS_HEIGHT, 'bottom', CANVAS_HEIGHT);
+                                        checkSnapY(imgCenterY, CANVAS_HEIGHT, 'center', CANVAS_HEIGHT);
+
+                                        // Check against elements
+                                        for (const el of elementsRef.current) {
+                                            if (!el.visible) continue;
+                                            const bounds = getElementBounds(el, el.x, el.y);
+
+                                            checkSnapX(imgLeft, bounds.left, 'left', bounds.left);
+                                            checkSnapX(imgRight, bounds.right, 'right', bounds.right);
+                                            checkSnapX(imgCenterX, bounds.centerX, 'center', bounds.centerX);
+                                            checkSnapX(imgLeft, bounds.right, 'left', bounds.right);
+                                            checkSnapX(imgRight, bounds.left, 'right', bounds.left);
+
+                                            checkSnapY(imgTop, bounds.top, 'top', bounds.top);
+                                            checkSnapY(imgBottom, bounds.bottom, 'bottom', bounds.bottom);
+                                            checkSnapY(imgCenterY, bounds.centerY, 'center', bounds.centerY);
+                                            checkSnapY(imgTop, bounds.bottom, 'top', bounds.bottom);
+                                            checkSnapY(imgBottom, bounds.top, 'bottom', bounds.top);
+                                        }
+
+                                        // Apply magnetic snapping
+                                        if (bestSnapX) {
+                                            let snapX = currentX;
+                                            if (bestSnapX.type === 'left') snapX = bestSnapX.value;
+                                            else if (bestSnapX.type === 'right') snapX = bestSnapX.value - imgWidth;
+                                            else if (bestSnapX.type === 'center') snapX = bestSnapX.value - imgWidth / 2;
+                                            node.x(snapX);
+                                        }
+                                        if (bestSnapY) {
+                                            let snapY = currentY;
+                                            if (bestSnapY.type === 'top') snapY = bestSnapY.value;
+                                            else if (bestSnapY.type === 'bottom') snapY = bestSnapY.value - imgHeight;
+                                            else if (bestSnapY.type === 'center') snapY = bestSnapY.value - imgHeight / 2;
+                                            node.y(snapY);
+                                        }
+
+                                        guides.vertical = [...new Set(guides.vertical)];
+                                        guides.horizontal = [...new Set(guides.horizontal)];
+                                        setSmartGuides(guides);
+                                    }}
+                                    onDragEnd={(e) => {
+                                        setMapImagePosition({
+                                            x: e.target.x(),
+                                            y: e.target.y(),
+                                        });
+                                        setHasUnsavedChanges(true);
+                                        setSmartGuides({ vertical: [], horizontal: [] });
+                                    }}
+                                    onTransformEnd={(e) => {
+                                        const node = e.target;
+                                        const scaleX = node.scaleX();
+                                        const scaleY = node.scaleY();
+
+                                        // Reset scale
+                                        node.scaleX(1);
+                                        node.scaleY(1);
+
+                                        setMapImagePosition({
+                                            x: node.x(),
+                                            y: node.y(),
+                                        });
+                                        setMapImageSize({
+                                            width: Math.max(50, mapImageSize.width * scaleX),
+                                            height: Math.max(50, mapImageSize.height * scaleY),
+                                        });
+                                        setHasUnsavedChanges(true);
+                                    }}
+                                >
+                                    {/* The actual image */}
+                                    <KonvaImage
+                                        ref={mapImageRef}
+                                        name="background-image"
+                                        image={mapImage}
+                                        width={mapImageSize.width}
+                                        height={mapImageSize.height}
+                                        opacity={0.9}
+                                    />
+
+                                    {/* Eraser strokes - use destination-out to actually cut from the image */}
+                                    {eraserStrokes.map((stroke, i) => {
+                                        const strokeSize = stroke[stroke.length - 1];
+                                        const points = stroke.slice(0, -1);
+                                        return (
+                                            <Line
+                                                key={`eraser-stroke-${i}`}
+                                                points={points}
+                                                stroke="#000000"
+                                                strokeWidth={strokeSize}
+                                                tension={0.5}
+                                                lineCap="round"
+                                                lineJoin="round"
+                                                globalCompositeOperation="destination-out"
+                                                listening={false}
+                                            />
+                                        );
+                                    })}
+
+                                    {/* Current eraser stroke preview */}
+                                    {isErasing && currentEraserStroke.length > 0 && (
+                                        <Line
+                                            points={currentEraserStroke}
+                                            stroke="#000000"
+                                            strokeWidth={eraserSize}
+                                            tension={0.5}
+                                            lineCap="round"
+                                            lineJoin="round"
+                                            globalCompositeOperation="destination-out"
+                                            listening={false}
+                                        />
+                                    )}
+                                </Group>
+                            )}
+
+                            {/* Additional Uploaded Images */}
+                            {uploadedImages.map((uploadedImg) => (
                                 <KonvaImage
-                                    name="background-image"
-                                    image={mapImage}
-                                    width={CANVAS_WIDTH}
-                                    height={CANVAS_HEIGHT}
-                                    opacity={0.9}
+                                    key={uploadedImg.id}
+                                    id={uploadedImg.id}
+                                    image={uploadedImg.image}
+                                    x={uploadedImg.x}
+                                    y={uploadedImg.y}
+                                    width={uploadedImg.width}
+                                    height={uploadedImg.height}
+                                    draggable={tool === 'select'}
+                                    onClick={(e) => {
+                                        if (tool === 'select') {
+                                            e.cancelBubble = true;
+                                            setSelectedImageId(uploadedImg.id);
+                                            setSelectedElementIds([]);
+                                            setIsImageSelected(false);
+                                        }
+                                    }}
+                                    onTap={(e) => {
+                                        if (tool === 'select') {
+                                            e.cancelBubble = true;
+                                            setSelectedImageId(uploadedImg.id);
+                                            setSelectedElementIds([]);
+                                            setIsImageSelected(false);
+                                        }
+                                    }}
+                                    onDragMove={(e) => {
+                                        // Smart guides for uploaded images
+                                        if (isCtrlCmdPressedRef.current) {
+                                            setSmartGuides({ vertical: [], horizontal: [] });
+                                            return;
+                                        }
+
+                                        const node = e.target;
+                                        const currentX = node.x();
+                                        const currentY = node.y();
+                                        const imgWidth = uploadedImg.width;
+                                        const imgHeight = uploadedImg.height;
+
+                                        const imgLeft = currentX;
+                                        const imgRight = currentX + imgWidth;
+                                        const imgTop = currentY;
+                                        const imgBottom = currentY + imgHeight;
+                                        const imgCenterX = currentX + imgWidth / 2;
+                                        const imgCenterY = currentY + imgHeight / 2;
+
+                                        const guides: { vertical: number[]; horizontal: number[] } = { vertical: [], horizontal: [] };
+                                        let bestSnapX: { value: number; distance: number; type: 'left' | 'right' | 'center' } | null = null;
+                                        let bestSnapY: { value: number; distance: number; type: 'top' | 'bottom' | 'center' } | null = null;
+
+                                        const checkSnapX = (edge: number, target: number, type: 'left' | 'right' | 'center', guide: number) => {
+                                            const dist = Math.abs(edge - target);
+                                            if (dist < SNAP_THRESHOLD) {
+                                                if (!bestSnapX || dist < bestSnapX.distance) {
+                                                    bestSnapX = { value: target, distance: dist, type };
+                                                }
+                                                guides.vertical.push(guide);
+                                            }
+                                        };
+
+                                        const checkSnapY = (edge: number, target: number, type: 'top' | 'bottom' | 'center', guide: number) => {
+                                            const dist = Math.abs(edge - target);
+                                            if (dist < SNAP_THRESHOLD) {
+                                                if (!bestSnapY || dist < bestSnapY.distance) {
+                                                    bestSnapY = { value: target, distance: dist, type };
+                                                }
+                                                guides.horizontal.push(guide);
+                                            }
+                                        };
+
+                                        // Check canvas edges
+                                        checkSnapX(imgLeft, 0, 'left', 0);
+                                        checkSnapX(imgCenterX, CANVAS_WIDTH / 2, 'center', CANVAS_WIDTH / 2);
+                                        checkSnapX(imgRight, CANVAS_WIDTH, 'right', CANVAS_WIDTH);
+                                        checkSnapY(imgTop, 0, 'top', 0);
+                                        checkSnapY(imgCenterY, CANVAS_HEIGHT / 2, 'center', CANVAS_HEIGHT / 2);
+                                        checkSnapY(imgBottom, CANVAS_HEIGHT, 'bottom', CANVAS_HEIGHT);
+
+                                        // Check against elements
+                                        for (const el of elementsRef.current) {
+                                            if (!el.visible) continue;
+                                            const bounds = getElementBounds(el, el.x, el.y);
+                                            checkSnapX(imgLeft, bounds.left, 'left', bounds.left);
+                                            checkSnapX(imgRight, bounds.right, 'right', bounds.right);
+                                            checkSnapX(imgCenterX, bounds.centerX, 'center', bounds.centerX);
+                                            checkSnapY(imgTop, bounds.top, 'top', bounds.top);
+                                            checkSnapY(imgBottom, bounds.bottom, 'bottom', bounds.bottom);
+                                            checkSnapY(imgCenterY, bounds.centerY, 'center', bounds.centerY);
+                                        }
+
+                                        // Apply magnetic snapping
+                                        if (bestSnapX) {
+                                            let snapX = currentX;
+                                            if (bestSnapX.type === 'left') snapX = bestSnapX.value;
+                                            else if (bestSnapX.type === 'right') snapX = bestSnapX.value - imgWidth;
+                                            else if (bestSnapX.type === 'center') snapX = bestSnapX.value - imgWidth / 2;
+                                            node.x(snapX);
+                                        }
+                                        if (bestSnapY) {
+                                            let snapY = currentY;
+                                            if (bestSnapY.type === 'top') snapY = bestSnapY.value;
+                                            else if (bestSnapY.type === 'bottom') snapY = bestSnapY.value - imgHeight;
+                                            else if (bestSnapY.type === 'center') snapY = bestSnapY.value - imgHeight / 2;
+                                            node.y(snapY);
+                                        }
+
+                                        guides.vertical = [...new Set(guides.vertical)];
+                                        guides.horizontal = [...new Set(guides.horizontal)];
+                                        setSmartGuides(guides);
+                                    }}
+                                    onDragEnd={(e) => {
+                                        setUploadedImages(prev => prev.map(img =>
+                                            img.id === uploadedImg.id
+                                                ? { ...img, x: e.target.x(), y: e.target.y() }
+                                                : img
+                                        ));
+                                        setHasUnsavedChanges(true);
+                                        setSmartGuides({ vertical: [], horizontal: [] });
+                                    }}
+                                    onTransformEnd={(e) => {
+                                        const node = e.target;
+                                        const scaleX = node.scaleX();
+                                        const scaleY = node.scaleY();
+                                        node.scaleX(1);
+                                        node.scaleY(1);
+
+                                        setUploadedImages(prev => prev.map(img =>
+                                            img.id === uploadedImg.id
+                                                ? {
+                                                    ...img,
+                                                    x: node.x(),
+                                                    y: node.y(),
+                                                    width: Math.max(20, img.width * scaleX),
+                                                    height: Math.max(20, img.height * scaleY),
+                                                }
+                                                : img
+                                        ));
+                                        setHasUnsavedChanges(true);
+                                    }}
+                                />
+                            ))}
+
+                            {/* Grid lines - rendered AFTER eraser strokes so they're visible */}
+                            {showGrid && (
+                                <Group name="grid-group-overlay" listening={false}>
+                                    {/* Vertical grid lines */}
+                                    {Array.from({ length: Math.ceil(CANVAS_WIDTH / 50) + 1 }).map((_, i) => (
+                                        <Line
+                                            key={`v-overlay-${i}`}
+                                            name="grid-line"
+                                            points={[i * 50, 0, i * 50, CANVAS_HEIGHT]}
+                                            stroke="#9ca3af"
+                                            strokeWidth={0.75}
+                                            listening={false}
+                                        />
+                                    ))}
+                                    {/* Horizontal grid lines */}
+                                    {Array.from({ length: Math.ceil(CANVAS_HEIGHT / 50) + 1 }).map((_, i) => (
+                                        <Line
+                                            key={`h-overlay-${i}`}
+                                            name="grid-line"
+                                            points={[0, i * 50, CANVAS_WIDTH, i * 50]}
+                                            stroke="#9ca3af"
+                                            strokeWidth={0.75}
+                                            listening={false}
+                                        />
+                                    ))}
+                                </Group>
+                            )}
+
+                            {/* Eraser cursor preview - dashed circle following the mouse */}
+                            {tool === 'eraser' && eraserCursorPos && (
+                                <Circle
+                                    x={eraserCursorPos.x}
+                                    y={eraserCursorPos.y}
+                                    radius={eraserSize / 2}
+                                    stroke="#000000"
+                                    strokeWidth={1.5}
+                                    dash={[4, 4]}
                                     listening={false}
                                 />
                             )}
@@ -3175,6 +4232,34 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                 );
                             })()}
 
+                            {/* Smart Guides - alignment lines */}
+                            {(smartGuides.vertical.length > 0 || smartGuides.horizontal.length > 0) && (
+                                <Group name="smart-guides" listening={false}>
+                                    {/* Vertical guides (for X alignment) */}
+                                    {smartGuides.vertical.map((x, i) => (
+                                        <Line
+                                            key={`v-guide-${i}`}
+                                            points={[x, 0, x, CANVAS_HEIGHT]}
+                                            stroke="#f43f5e"
+                                            strokeWidth={1}
+                                            dash={[4, 4]}
+                                            listening={false}
+                                        />
+                                    ))}
+                                    {/* Horizontal guides (for Y alignment) */}
+                                    {smartGuides.horizontal.map((y, i) => (
+                                        <Line
+                                            key={`h-guide-${i}`}
+                                            points={[0, y, CANVAS_WIDTH, y]}
+                                            stroke="#f43f5e"
+                                            strokeWidth={1}
+                                            dash={[4, 4]}
+                                            listening={false}
+                                        />
+                                    ))}
+                                </Group>
+                            )}
+
                             {/* Selection Box Overlay */}
                             {selectionBox?.active && (() => {
                                 const minX = Math.min(selectionBox.startX, selectionBox.endX);
@@ -3228,6 +4313,46 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                         }
                                     }
 
+                                    return newBox;
+                                }}
+                            />
+
+                            {/* Image Transformer */}
+                            <Transformer
+                                ref={imageTransformerRef}
+                                anchorSize={8}
+                                anchorCornerRadius={2}
+                                borderStroke="#3b82f6"
+                                borderStrokeWidth={2}
+                                anchorStroke="#3b82f6"
+                                anchorFill="#ffffff"
+                                rotateEnabled={false}
+                                keepRatio={false}
+                                enabledAnchors={['top-left', 'top-right', 'bottom-left', 'bottom-right', 'top-center', 'bottom-center', 'middle-left', 'middle-right']}
+                                boundBoxFunc={(oldBox, newBox) => {
+                                    if (newBox.width < 50 || newBox.height < 50) {
+                                        return oldBox;
+                                    }
+                                    return newBox;
+                                }}
+                            />
+
+                            {/* Uploaded Images Transformer */}
+                            <Transformer
+                                ref={uploadedImageTransformerRef}
+                                anchorSize={8}
+                                anchorCornerRadius={2}
+                                borderStroke="#10b981"
+                                borderStrokeWidth={2}
+                                anchorStroke="#10b981"
+                                anchorFill="#ffffff"
+                                rotateEnabled={true}
+                                keepRatio={false}
+                                enabledAnchors={['top-left', 'top-right', 'bottom-left', 'bottom-right', 'top-center', 'bottom-center', 'middle-left', 'middle-right']}
+                                boundBoxFunc={(oldBox, newBox) => {
+                                    if (newBox.width < 20 || newBox.height < 20) {
+                                        return oldBox;
+                                    }
                                     return newBox;
                                 }}
                             />
@@ -3301,10 +4426,11 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     {/* Label Edit Input (for element labels) */}
                     {editingLabelId && (
                         <div
-                            className="absolute z-50 transform -translate-x-1/2 -translate-y-1/2 pointer-events-auto"
+                            className="absolute z-50 pointer-events-auto"
                             style={{
                                 left: editingLabelPosition.x,
                                 top: editingLabelPosition.y,
+                                transform: 'translate(-50%, -50%)',
                             }}
                             onMouseDown={(e) => e.stopPropagation()}
                         >
@@ -3359,6 +4485,15 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                 element={selectedElement}
                                 elements={elements}
                                 onUpdateElement={updateElement}
+                                activeTool={tool}
+                                eraserSize={eraserSize}
+                                onEraserSizeChange={setEraserSize}
+                                onClearEraserStrokes={() => {
+                                    setEraserStrokes([]);
+                                    setEraserHistory([]);
+                                    setEraserHistoryStep(-1);
+                                }}
+                                hasEraserStrokes={eraserStrokes.length > 0}
                             />
                         </TabsContent>
 
