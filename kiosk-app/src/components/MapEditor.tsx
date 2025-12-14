@@ -1,7 +1,6 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
-import { Upload, Trash2, Hammer, ArrowLeft, ArrowRight, ZoomIn, ZoomOut, Maximize, Grid, Eye, Send, Loader2, Monitor } from 'lucide-react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { Trash2, ZoomIn, ZoomOut, Maximize, Grid, Eye, Send, Loader2, Monitor, Download, AlignLeft, AlignCenter, AlignRight, AlignVerticalJustifyStart, AlignVerticalJustifyCenter, AlignVerticalJustifyEnd, MoveHorizontal, MoveVertical, Magnet } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Slider } from '@/components/ui/slider';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -16,9 +15,10 @@ import LayersPanel from './map-editor/LayersPanel';
 import PropertiesPanel from './map-editor/PropertiesPanel';
 import LinksPanel from './map-editor/LinksPanel';
 import PreviewModal from './map-editor/PreviewModal';
-import type { MapElement, Tool, ElementType, AnimationStyle } from './map-editor/types';
+import type { MapElement, Tool, ElementType, AnimationStyle, StrokeStyle } from './map-editor/types';
 // Note: ContextualToolbar removed - properties now shown in header bar
-import { defaultElement, defaultSizes, defaultSmartPin, defaultStaticPin, CANVAS_WIDTH, CANVAS_HEIGHT, calculateFitToViewScale, animationStyleLabels } from './map-editor/types';
+import { defaultElement, defaultSizes, defaultSmartPin, defaultStaticPin, defaultDevicePin, CANVAS_WIDTH, CANVAS_HEIGHT, calculateFitToViewScale, animationStyleLabels, getStrokeDash } from './map-editor/types';
+import { getGradientProps } from './map-editor/GradientEditor';
 
 interface MapEditorProps {
     storeId: number;
@@ -28,14 +28,14 @@ interface MapEditorProps {
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
 const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
-    const [mode, setMode] = useState<'choice' | 'builder'>('choice');
+    const [mode, setMode] = useState<'builder'>('builder');
     const [mapImageUrl, setMapImageUrl] = useState<string | null>(null);
     const [mapImage, setMapImage] = useState<HTMLImageElement | null>(null);
     const [mapImagePosition, setMapImagePosition] = useState({ x: 0, y: 0 });
     const [mapImageSize, setMapImageSize] = useState({ width: CANVAS_WIDTH, height: CANVAS_HEIGHT });
     const [isImageSelected, setIsImageSelected] = useState(false);
 
-    // Multiple uploaded images support
+    // Multiple uploaded images support with per-image eraser strokes
     const [uploadedImages, setUploadedImages] = useState<Array<{
         id: string;
         url: string;
@@ -44,8 +44,10 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         y: number;
         width: number;
         height: number;
+        eraserStrokes: number[][]; // Per-image eraser strokes
     }>>([]);
-    const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
+    const [selectedImageIds, setSelectedImageIds] = useState<string[]>([]); // Support multi-select for images
+    const [erasingImageId, setErasingImageId] = useState<string | null>(null); // Track which image is being erased
 
     const [elements, setElements] = useState<MapElement[]>([]);
     const [selectedElementIds, setSelectedElementIds] = useState<string[]>([]);
@@ -53,16 +55,27 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     const [loading, setLoading] = useState(false);
     const [uploading, setUploading] = useState(false);
     const [autoSaving, setAutoSaving] = useState(false);
-    const [hasExistingWork, setHasExistingWork] = useState(false); // Track if user has existing map/elements
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false); // Track if there are unsaved changes
     const [initialLoading, setInitialLoading] = useState(true); // Track initial data loading
     const [isDrawing, setIsDrawing] = useState(false);
     const [freehandPoints, setFreehandPoints] = useState<number[]>([]);
     const [showGrid, setShowGrid] = useState(true);
+    const [snapToGrid, setSnapToGrid] = useState(false); // Snap elements to grid intersections
     const [showCaptureArea, setShowCaptureArea] = useState(false); // Toggle capture area boundary visibility
     const [copiedElements, setCopiedElements] = useState<MapElement[]>([]);
     const [pasteCount, setPasteCount] = useState(0);
     const [isRightMouseDown, setIsRightMouseDown] = useState(false);
+    const [isSpaceDragging, setIsSpaceDragging] = useState(false); // Track spacebar+drag panning
+
+    // Context menu state
+    const [contextMenu, setContextMenu] = useState<{
+        x: number;
+        y: number;
+        visible: boolean;
+        targetElementId: string | null;
+        targetImageId: string | null;
+        isOnCanvas: boolean;
+    } | null>(null);
 
     // Selection box state for multi-select
     const [selectionBox, setSelectionBox] = useState<{
@@ -73,9 +86,17 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         active: boolean;
     } | null>(null);
 
-    // History state for undo/redo
-    const [history, setHistory] = useState<MapElement[][]>([[]]);
-    const [historyStep, setHistoryStep] = useState(0);
+    // Unified history type for proper ordering of all undo/redo actions
+    type UploadedImageData = { id: string; url: string; x: number; y: number; width: number; height: number; eraserStrokes: number[][] };
+    type HistoryAction =
+        | { type: 'elements'; elements: MapElement[] }
+        | { type: 'uploadedImageEraser'; imageId: string; previousStrokes: number[][]; addedStroke: number[] }
+        | { type: 'legacyEraser'; previousStrokes: number[][]; addedStroke: number[] }
+        | { type: 'uploadedImages'; previousImages: UploadedImageData[]; afterImages: UploadedImageData[] };
+
+    // Unified history state for undo/redo (replaces separate histories)
+    const [unifiedHistory, setUnifiedHistory] = useState<HistoryAction[]>([{ type: 'elements', elements: [] }]);
+    const [unifiedHistoryStep, setUnifiedHistoryStep] = useState(0);
 
     // Zoom state - default to 0.56 which represents "100%" visually (fits capture area)
     const [scale, setScale] = useState(0.56);
@@ -105,6 +126,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     } | null>(null);
     const [isPublishing, setIsPublishing] = useState(false);
     const [lastPublishedElements, setLastPublishedElements] = useState<string>(''); // Track last published state for local comparison
+    const [lastPublishedEraserStrokes, setLastPublishedEraserStrokes] = useState<string>(''); // Track last published eraser strokes
 
     // Contextual toolbar position
     const [toolbarPosition, setToolbarPosition] = useState<{ x: number; y: number } | null>(null);
@@ -120,12 +142,11 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
 
     // Eraser state
     const [eraserSize, setEraserSize] = useState(20);
-    const [eraserStrokes, setEraserStrokes] = useState<number[][]>([]); // Array of point arrays
+    const [eraserStrokes, setEraserStrokes] = useState<number[][]>([]); // Array of point arrays (legacy mapImage)
     const [currentEraserStroke, setCurrentEraserStroke] = useState<number[]>([]);
     const [isErasing, setIsErasing] = useState(false);
     const [eraserCursorPos, setEraserCursorPos] = useState<{ x: number; y: number } | null>(null);
-    const [eraserHistory, setEraserHistory] = useState<number[][][]>([]); // History of eraser stroke states
-    const [eraserHistoryStep, setEraserHistoryStep] = useState(-1); // Current position in eraser history
+    // Note: Eraser history is now handled by unifiedHistory above
 
     const transformerRef = useRef<any>(null);
     const imageTransformerRef = useRef<any>(null);
@@ -143,14 +164,20 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     const isUndoRedoRef = useRef(false); // Track if we're in undo/redo
     const isShiftPressedRef = useRef(false); // Track Shift key for proportional resizing
     const isCtrlCmdPressedRef = useRef(false); // Track Ctrl/Cmd key to disable smart guides
+    const isSpacePressedRef = useRef(false); // Track Spacebar for pan mode
     const eraserSizeRef = useRef(eraserSize); // Track eraser size for callbacks
     const mapImagePositionRef = useRef(mapImagePosition); // Track image position for eraser
     const eraserStrokesRef = useRef(eraserStrokes); // Track eraser strokes for undo
+    const uploadedImagesRef = useRef(uploadedImages); // Track uploaded images for eraser
+    const erasingImageIdRef = useRef(erasingImageId); // Track which image is being erased
     const dragStartPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map()); // Track drag start positions
     const lineArrowDragOffsetRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 }); // Track drag offset for line/arrow anchors
     const initialLoadRef = useRef(true); // Track initial load to detect changes
     const lastSavedStateRef = useRef<string | null>(null); // Track last saved state for comparison
     const justFinishedEditingRef = useRef(false); // Prevent double-click right after dismissing prompt
+    const unifiedHistoryRef = useRef(unifiedHistory); // Track unified history for callbacks
+    const unifiedHistoryStepRef = useRef(unifiedHistoryStep); // Track history step for callbacks
+    const imageDragStartStateRef = useRef<typeof uploadedImages | null>(null); // Track image state before drag/transform for undo
 
     // Keep refs in sync with state
     useEffect(() => {
@@ -173,6 +200,42 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         eraserStrokesRef.current = eraserStrokes;
     }, [eraserStrokes]);
 
+    useEffect(() => {
+        uploadedImagesRef.current = uploadedImages;
+    }, [uploadedImages]);
+
+    // Save uploadedImages to localStorage (for persistence across page reloads)
+    useEffect(() => {
+        if (uploadedImages.length > 0) {
+            // Save only serializable data (exclude HTMLImageElement)
+            const dataToSave = uploadedImages.map(img => ({
+                id: img.id,
+                url: img.url,
+                x: img.x,
+                y: img.y,
+                width: img.width,
+                height: img.height,
+                eraserStrokes: img.eraserStrokes,
+            }));
+            localStorage.setItem(`map-editor-images-${storeId}`, JSON.stringify(dataToSave));
+        } else {
+            // Clear localStorage if no images
+            localStorage.removeItem(`map-editor-images-${storeId}`);
+        }
+    }, [uploadedImages, storeId]);
+
+    useEffect(() => {
+        erasingImageIdRef.current = erasingImageId;
+    }, [erasingImageId]);
+
+    useEffect(() => {
+        unifiedHistoryRef.current = unifiedHistory;
+    }, [unifiedHistory]);
+
+    useEffect(() => {
+        unifiedHistoryStepRef.current = unifiedHistoryStep;
+    }, [unifiedHistoryStep]);
+
     // Cache the image group when eraser strokes change (needed for composite operations)
     useEffect(() => {
         if (imageGroupRef.current && mapImage) {
@@ -181,6 +244,23 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             imageGroupRef.current.cache();
         }
     }, [eraserStrokes, currentEraserStroke, mapImage, mapImageSize]);
+
+    // Cache uploaded image groups when their eraser strokes change
+    useEffect(() => {
+        if (stageRef.current) {
+            // Use requestAnimationFrame to ensure DOM is updated first
+            requestAnimationFrame(() => {
+                uploadedImages.forEach(img => {
+                    const groupNode = stageRef.current?.findOne(`#image-group-${img.id}`);
+                    if (groupNode && img.image) {
+                        groupNode.clearCache();
+                        groupNode.cache();
+                        groupNode.getLayer()?.batchDraw();
+                    }
+                });
+            });
+        }
+    }, [uploadedImages, currentEraserStroke, isErasing]);
 
     // Update contextual toolbar position when selection changes
     useEffect(() => {
@@ -208,6 +288,12 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     const staticPinHeight = (element.height || 55) * 0.7;
                     const staticPointerHeight = (element.height || 55) * 0.3;
                     y = element.y - staticPinHeight - staticPointerHeight; // Top of the rectangle
+                } else if (element.type === 'device-pin') {
+                    // Device pins extend above their Y position (screen + stand)
+                    const devicePinHeight = element.height || 60;
+                    const screenHeight = devicePinHeight * 0.70;
+                    const standHeight = devicePinHeight * 0.30;
+                    y = element.y - screenHeight - standHeight; // Top of the screen
                 } else if (element.type !== 'circle' && element.type !== 'polygon' && element.type !== 'triangle') {
                     // For most elements, use center-top position
                     x = element.x + element.width / 2;
@@ -311,24 +397,65 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     const handlePublish = async () => {
         setIsPublishing(true);
         try {
+            // First, save uploaded images to database (draft)
+            const imagesToSave = uploadedImages.map(img => ({
+                id: img.id,
+                url: img.url,
+                x: img.x,
+                y: img.y,
+                width: img.width,
+                height: img.height,
+                eraserStrokes: img.eraserStrokes
+            }));
+
+            const saveImagesResponse = await fetch(
+                `${API_URL}/api/admin/stores/${storeId}/map/uploaded-images`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ uploadedImages: imagesToSave })
+                }
+            );
+
+            if (!saveImagesResponse.ok) {
+                console.error('Failed to save images to database');
+            }
+
+            // Publish elements
             const response = await fetch(
                 `${API_URL}/api/admin/stores/${storeId}/map/publish`,
                 { method: 'POST' }
             );
 
             if (response.ok) {
+                // Also publish uploaded images
+                await fetch(
+                    `${API_URL}/api/admin/stores/${storeId}/map/uploaded-images/publish`,
+                    { method: 'POST' }
+                );
+
                 const data = await response.json();
                 toast.success(`Map published successfully! ${data.publishedCount} elements are now live.`);
                 // Store current state as the new published state for local comparison
                 const publishedState = JSON.stringify(elements.map(el => ({
-                    id: el.id, type: el.type, x: el.x, y: el.y, width: el.width, height: el.height,
+                    id: el.id, type: el.type, name: el.name, x: el.x, y: el.y, width: el.width, height: el.height,
                     fillColor: el.fillColor, strokeColor: el.strokeColor, fillOpacity: el.fillOpacity,
                     strokeWidth: el.strokeWidth, cornerRadius: el.cornerRadius,
                     rotation: el.rotation, text: el.text, zIndex: el.zIndex, visible: el.visible,
                     animationStyle: el.animationStyle, motionScale: el.motionScale, pinLabel: el.pinLabel,
+                    pinLabelFontSize: el.pinLabelFontSize, pinLabelColor: el.pinLabelColor, pinLabelFontWeight: el.pinLabelFontWeight,
                     fontSize: el.fontSize, fontWeight: el.fontWeight
                 })));
                 setLastPublishedElements(publishedState);
+                // Also save eraser strokes state as published
+                setLastPublishedEraserStrokes(JSON.stringify(uploadedImages.map(img => ({
+                    id: img.id,
+                    eraserStrokes: img.eraserStrokes
+                }))));
+
+                // Also update localStorage for backward compatibility
+                localStorage.setItem(`map-editor-images-${storeId}`, JSON.stringify(imagesToSave));
+
                 fetchPublishStatus();
             } else {
                 const error = await response.json();
@@ -361,17 +488,28 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
 
     // Check if there are local draft changes by comparing current elements to last published state
     const hasLocalDraftChanges = useCallback(() => {
-        if (lastPublishedElements === '') return elements.length > 0; // No published state yet, any elements means changes
+        // Check if elements have changed
+        if (lastPublishedElements === '') {
+            if (elements.length > 0) return true; // No published state yet, any elements means changes
+        }
         const currentState = JSON.stringify(elements.map(el => ({
-            id: el.id, type: el.type, x: el.x, y: el.y, width: el.width, height: el.height,
+            id: el.id, type: el.type, name: el.name, x: el.x, y: el.y, width: el.width, height: el.height,
             fillColor: el.fillColor, strokeColor: el.strokeColor, fillOpacity: el.fillOpacity,
             strokeWidth: el.strokeWidth, cornerRadius: el.cornerRadius,
             rotation: el.rotation, text: el.text, zIndex: el.zIndex, visible: el.visible,
             animationStyle: el.animationStyle, motionScale: el.motionScale, pinLabel: el.pinLabel,
+            pinLabelFontSize: el.pinLabelFontSize, pinLabelColor: el.pinLabelColor, pinLabelFontWeight: el.pinLabelFontWeight,
             fontSize: el.fontSize, fontWeight: el.fontWeight
         })));
-        return currentState !== lastPublishedElements;
-    }, [elements, lastPublishedElements]);
+
+        // Check if eraser strokes on uploaded images have changed
+        const currentEraserState = JSON.stringify(uploadedImages.map(img => ({
+            id: img.id,
+            eraserStrokes: img.eraserStrokes
+        })));
+
+        return currentState !== lastPublishedElements || currentEraserState !== lastPublishedEraserStrokes;
+    }, [elements, lastPublishedElements, uploadedImages, lastPublishedEraserStrokes]);
 
     // Load canvas state from localStorage when component mounts or storeId changes
     useEffect(() => {
@@ -456,6 +594,23 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         }
     }, [editingLabelId]);
 
+    // Update label edit position when zoom/pan changes (to keep cursor centered on element)
+    useEffect(() => {
+        if (editingLabelId) {
+            const element = elements.find(el => el.id === editingLabelId);
+            if (element) {
+                setEditingLabelPosition(getElementCenter(element));
+            }
+        }
+        // Also update text editing position
+        if (editingTextId) {
+            const element = elements.find(el => el.id === editingTextId);
+            if (element) {
+                setEditingLabelPosition(getElementCenter(element));
+            }
+        }
+    }, [scale, stagePosition.x, stagePosition.y, editingLabelId, editingTextId]);
+
     // Track Shift key for proportional resizing and Ctrl/Cmd key to disable smart guides
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -465,6 +620,13 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             if (e.key === 'Control' || e.key === 'Meta') {
                 isCtrlCmdPressedRef.current = true;
             }
+            if (e.key === ' ' || e.code === 'Space') {
+                // Prevent page scroll when spacebar is pressed (unless in input)
+                if (!(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
+                    e.preventDefault();
+                }
+                isSpacePressedRef.current = true;
+            }
         };
 
         const handleKeyUp = (e: KeyboardEvent) => {
@@ -473,6 +635,10 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             }
             if (e.key === 'Control' || e.key === 'Meta') {
                 isCtrlCmdPressedRef.current = false;
+            }
+            if (e.key === ' ' || e.code === 'Space') {
+                isSpacePressedRef.current = false;
+                setIsSpaceDragging(false);
             }
         };
 
@@ -662,21 +828,15 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         if (existingTimeout) {
             clearTimeout(existingTimeout);
         } else {
-            // New pending update
+            // Track pending update count
             pendingUpdateCountRef.current++;
-            if (pendingUpdateCountRef.current === 1) {
-                setAutoSaving(true);
-            }
         }
 
-        // Schedule new update with 300ms debounce
+        // Schedule new update with 300ms debounce (save silently without indicator)
         const timeout = setTimeout(async () => {
             pendingUpdatesRef.current.delete(element.id);
             await updateElementInDb(element);
             pendingUpdateCountRef.current--;
-            if (pendingUpdateCountRef.current === 0) {
-                setAutoSaving(false);
-            }
         }, 300);
 
         pendingUpdatesRef.current.set(element.id, timeout);
@@ -762,18 +922,21 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     useEffect(() => {
         if (!uploadedImageTransformerRef.current || !stageRef.current) return;
 
-        if (selectedImageId) {
+        if (selectedImageIds.length > 0) {
             const stage = stageRef.current;
-            const node = stage.findOne(`#${selectedImageId}`);
-            if (node) {
-                uploadedImageTransformerRef.current.nodes([node]);
+            // Find all Groups that wrap the selected images
+            const nodes = selectedImageIds
+                .map(id => stage.findOne(`#image-group-${id}`))
+                .filter(Boolean);
+            if (nodes.length > 0) {
+                uploadedImageTransformerRef.current.nodes(nodes);
                 uploadedImageTransformerRef.current.getLayer()?.batchDraw();
             }
         } else {
             uploadedImageTransformerRef.current.nodes([]);
             uploadedImageTransformerRef.current.getLayer()?.batchDraw();
         }
-    }, [selectedImageId, uploadedImages]);
+    }, [selectedImageIds, uploadedImages]);
 
     // Track changes to elements for undo/redo
     useEffect(() => {
@@ -786,9 +949,21 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         // Only save to history if there are meaningful changes
         if (elements.length >= 0) {
             const currentState = JSON.stringify(elements);
-            const lastHistoryState = history[historyStep] ? JSON.stringify(history[historyStep]) : '';
+            // Use refs to get the latest history state (avoids stale closure issues)
+            const currentHistory = unifiedHistoryRef.current;
+            const currentStep = unifiedHistoryStepRef.current;
 
-            if (currentState !== lastHistoryState) {
+            // Find the last elements action in unified history
+            let lastElementsState = '';
+            for (let i = currentStep; i >= 0; i--) {
+                const action = currentHistory[i];
+                if (action && action.type === 'elements') {
+                    lastElementsState = JSON.stringify(action.elements);
+                    break;
+                }
+            }
+
+            if (currentState !== lastElementsState) {
                 saveToHistory(elements);
             }
         }
@@ -857,12 +1032,128 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     const loadMapData = async () => {
         setInitialLoading(true);
         try {
+            // Try to load uploaded images from database first
+            let imagesLoadedFromDb = false;
+            try {
+                const dbImagesResponse = await fetch(`${API_URL}/api/admin/stores/${storeId}/map/uploaded-images`);
+                if (dbImagesResponse.ok) {
+                    const dbImagesData = await dbImagesResponse.json();
+                    const savedImages = dbImagesData.uploadedImages;
+
+                    if (savedImages && savedImages.length > 0) {
+                        // Recreate Image objects from saved URLs
+                        const loadedImages: Array<{
+                            id: string;
+                            url: string;
+                            image: HTMLImageElement | null;
+                            x: number;
+                            y: number;
+                            width: number;
+                            height: number;
+                            eraserStrokes: number[][];
+                        }> = [];
+
+                        for (const savedImg of savedImages) {
+                            const img = new Image();
+                            img.crossOrigin = 'anonymous';
+                            // Create a promise to load the image
+                            await new Promise<void>((resolve) => {
+                                img.onload = () => {
+                                    loadedImages.push({
+                                        id: savedImg.id,
+                                        url: savedImg.url,
+                                        image: img,
+                                        x: savedImg.x,
+                                        y: savedImg.y,
+                                        width: savedImg.width,
+                                        height: savedImg.height,
+                                        eraserStrokes: savedImg.eraserStrokes || [],
+                                    });
+                                    resolve();
+                                };
+                                img.onerror = () => {
+                                    console.warn(`Failed to load image: ${savedImg.url}`);
+                                    resolve(); // Continue even if image fails to load
+                                };
+                                // Handle both relative and absolute URLs
+                                img.src = savedImg.url.startsWith('/') ? `${API_URL}${savedImg.url}` : savedImg.url;
+                            });
+                        }
+
+                        if (loadedImages.length > 0) {
+                            setUploadedImages(loadedImages);
+                            imagesLoadedFromDb = true;
+                            // Also sync to localStorage for backup
+                            localStorage.setItem(`map-editor-images-${storeId}`, JSON.stringify(savedImages));
+                        }
+                    }
+                }
+            } catch (dbError) {
+                console.warn('Failed to load images from database, falling back to localStorage:', dbError);
+            }
+
+            // Fall back to localStorage if database didn't have images
+            if (!imagesLoadedFromDb) {
+                const savedImagesJson = localStorage.getItem(`map-editor-images-${storeId}`);
+                if (savedImagesJson) {
+                    try {
+                        const savedImages = JSON.parse(savedImagesJson);
+                        if (savedImages && savedImages.length > 0) {
+                            // Recreate Image objects from saved URLs
+                            const loadedImages: Array<{
+                                id: string;
+                                url: string;
+                                image: HTMLImageElement | null;
+                                x: number;
+                                y: number;
+                                width: number;
+                                height: number;
+                                eraserStrokes: number[][];
+                            }> = [];
+
+                            for (const savedImg of savedImages) {
+                                const img = new Image();
+                                img.crossOrigin = 'anonymous';
+                                // Create a promise to load the image
+                                await new Promise<void>((resolve) => {
+                                    img.onload = () => {
+                                        loadedImages.push({
+                                            id: savedImg.id,
+                                            url: savedImg.url,
+                                            image: img,
+                                            x: savedImg.x,
+                                            y: savedImg.y,
+                                            width: savedImg.width,
+                                            height: savedImg.height,
+                                            eraserStrokes: savedImg.eraserStrokes || [],
+                                        });
+                                        resolve();
+                                    };
+                                    img.onerror = () => {
+                                        console.warn(`Failed to load image: ${savedImg.url}`);
+                                        resolve(); // Continue even if image fails to load
+                                    };
+                                    img.src = savedImg.url.startsWith('/') ? `${API_URL}${savedImg.url}` : savedImg.url;
+                                });
+                            }
+
+                            if (loadedImages.length > 0) {
+                                setUploadedImages(loadedImages);
+                                imagesLoadedFromDb = true; // Mark as loaded to skip legacy migration
+                            }
+                        }
+                    } catch (parseError) {
+                        console.warn('Failed to parse saved images from localStorage:', parseError);
+                    }
+                }
+            }
+
             const response = await fetch(`${API_URL}/api/admin/stores/${storeId}/map`);
             if (!response.ok) {
                 setMapImageUrl(null);
                 setMapImage(null);
                 setElements([]);
-                setMode('choice');
+                setMode('builder');
                 setInitialLoading(false);
                 return;
             }
@@ -870,23 +1161,51 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             const hasMap = !!data.store?.map_image_url;
             const hasElements = data.elements && data.elements.length > 0;
 
-            // Track if user has existing work
-            setHasExistingWork(hasMap || hasElements);
+            // Only migrate legacy map image if we don't already have images loaded
+            if (hasMap && !imagesLoadedFromDb) {
+                // Migrate legacy map image to uploadedImages array
+                const mapUrl = data.store.map_image_url;
+                const img = new Image();
+                img.crossOrigin = 'anonymous';
+                img.onload = () => {
+                    // Scale to fit canvas while maintaining aspect ratio
+                    const maxSize = 800;
+                    let width = img.naturalWidth;
+                    let height = img.naturalHeight;
+                    if (width > maxSize || height > maxSize) {
+                        const scale = Math.min(maxSize / width, maxSize / height);
+                        width *= scale;
+                        height *= scale;
+                    }
 
-            if (hasMap) {
-                setMapImageUrl(data.store.map_image_url);
-                setMode('builder'); // Go directly to builder if map exists
-            } else if (hasElements) {
-                // Has elements but no map image - still go to builder
-                setMapImageUrl(null);
-                setMapImage(null);
+                    // Center the image
+                    const x = (CANVAS_WIDTH - width) / 2;
+                    const y = (CANVAS_HEIGHT - height) / 2;
+
+                    setUploadedImages(prev => [...prev, {
+                        id: `legacy-map-${Date.now()}`,
+                        url: mapUrl,
+                        image: img,
+                        x,
+                        y,
+                        width,
+                        height,
+                        eraserStrokes: [],
+                    }]);
+                };
+                img.src = `${API_URL}${mapUrl}`;
+                setMode('builder');
+            } else if (hasElements || imagesLoadedFromDb) {
+                // Has elements or images - go to builder
                 setMode('builder');
             } else {
-                // No existing work - show template choice
-                setMapImageUrl(null);
-                setMapImage(null);
-                setMode('choice');
+                // No existing work - go to builder directly
+                setMode('builder');
             }
+
+            // Clear legacy mapImage state
+            setMapImageUrl(null);
+            setMapImage(null);
 
             if (hasElements) {
                 const loadedElements = data.elements.map((el: any) => {
@@ -926,17 +1245,48 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                         showNameOn: metadata.showNameOn !== undefined ? metadata.showNameOn : (el.showNameOn !== undefined ? el.showNameOn : 'both'),
                         labelOffsetX: metadata.labelOffsetX ?? el.labelOffsetX ?? 0,
                         labelOffsetY: metadata.labelOffsetY ?? el.labelOffsetY ?? 0,
+                        // Label styling properties
+                        labelFontSize: metadata.labelFontSize ?? el.labelFontSize ?? 28,
+                        labelFontFamily: metadata.labelFontFamily ?? el.labelFontFamily ?? 'Arial',
+                        labelFontWeight: metadata.labelFontWeight ?? el.labelFontWeight ?? 'normal',
+                        labelColor: metadata.labelColor ?? el.labelColor ?? '#000000',
+                        // Pin-specific properties
+                        animationStyle: metadata.animationStyle ?? el.animationStyle ?? 0,
+                        motionScale: metadata.motionScale ?? el.motionScale ?? 1,
+                        pinLabel: metadata.pinLabel ?? el.pinLabel ?? '',
+                        pinLabelFontSize: metadata.pinLabelFontSize ?? el.pinLabelFontSize ?? 16,
+                        pinLabelColor: metadata.pinLabelColor ?? el.pinLabelColor ?? '#ffffff',
+                        pinLabelFontWeight: metadata.pinLabelFontWeight ?? el.pinLabelFontWeight ?? 'normal',
+                        pinLabelFontFamily: metadata.pinLabelFontFamily ?? el.pinLabelFontFamily ?? 'Inter, system-ui, -apple-system, sans-serif',
+                        // Transform properties
+                        scaleX: metadata.scaleX ?? el.scaleX ?? 1,
+                        scaleY: metadata.scaleY ?? el.scaleY ?? 1,
+                        // Stroke style
+                        strokeStyle: metadata.strokeStyle ?? el.strokeStyle ?? 'solid',
+                        // Gradient - keep undefined if not set
+                        gradient: metadata.gradient ?? el.gradient,
+                        // Text effects - keep undefined if not set
+                        textShadow: metadata.textShadow ?? el.textShadow,
+                        textOutline: metadata.textOutline ?? el.textOutline,
+                        textGlow: metadata.textGlow ?? el.textGlow,
+                        // Additional text properties
+                        letterSpacing: metadata.letterSpacing ?? el.letterSpacing ?? 0,
+                        lineHeight: metadata.lineHeight ?? el.lineHeight ?? 1,
+                        textDecoration: metadata.textDecoration ?? el.textDecoration ?? 'none',
+                        // Mark as persisted since this element exists in the database
+                        persisted: true,
                         metadata: metadata
                     };
                 });
                 setElements(loadedElements);
                 // Store initial published state for local draft comparison
                 const publishedState = JSON.stringify(loadedElements.map((el: MapElement) => ({
-                    id: el.id, type: el.type, x: el.x, y: el.y, width: el.width, height: el.height,
+                    id: el.id, type: el.type, name: el.name, x: el.x, y: el.y, width: el.width, height: el.height,
                     fillColor: el.fillColor, strokeColor: el.strokeColor, fillOpacity: el.fillOpacity,
                     strokeWidth: el.strokeWidth, cornerRadius: el.cornerRadius,
                     rotation: el.rotation, text: el.text, zIndex: el.zIndex, visible: el.visible,
                     animationStyle: el.animationStyle, motionScale: el.motionScale, pinLabel: el.pinLabel,
+                    pinLabelFontSize: el.pinLabelFontSize, pinLabelColor: el.pinLabelColor, pinLabelFontWeight: el.pinLabelFontWeight,
                     fontSize: el.fontSize, fontWeight: el.fontWeight
                 })));
                 setLastPublishedElements(publishedState);
@@ -950,7 +1300,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             setMapImageUrl(null);
             setMapImage(null);
             setElements([]);
-            setMode('choice');
+            setMode('builder');
             setInitialLoading(false);
         }
     };
@@ -969,9 +1319,6 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             return;
         }
 
-        // Check if we're in builder mode - if so, add as additional image
-        const isAdditionalUpload = mode === 'builder';
-
         const formData = new FormData();
         formData.append('image', file);
 
@@ -989,49 +1336,42 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
 
             const data = await response.json();
 
-            if (isAdditionalUpload) {
-                // Add as additional image (incremental upload)
-                const newImageId = `img-${Date.now()}`;
-                const img = new Image();
-                img.crossOrigin = 'anonymous';
-                img.onload = () => {
-                    // Scale image to fit reasonably on canvas (max 400px on either dimension)
-                    const maxSize = 400;
-                    let width = img.naturalWidth;
-                    let height = img.naturalHeight;
-                    if (width > maxSize || height > maxSize) {
-                        const scale = Math.min(maxSize / width, maxSize / height);
-                        width *= scale;
-                        height *= scale;
-                    }
+            // Add image to canvas
+            const newImageId = `img-${Date.now()}`;
+            const img = new Image();
+            img.crossOrigin = 'anonymous';
+            img.onload = () => {
+                // Scale image to fit reasonably on canvas (max 800px for first image, 400px for subsequent)
+                const isFirstImage = uploadedImages.length === 0;
+                const maxSize = isFirstImage ? 800 : 400;
+                let width = img.naturalWidth;
+                let height = img.naturalHeight;
+                if (width > maxSize || height > maxSize) {
+                    const scale = Math.min(maxSize / width, maxSize / height);
+                    width *= scale;
+                    height *= scale;
+                }
 
-                    setUploadedImages(prev => [...prev, {
-                        id: newImageId,
-                        url: data.imageUrl,
-                        image: img,
-                        x: 100 + (prev.length * 20), // Offset each new image
-                        y: 100 + (prev.length * 20),
-                        width,
-                        height,
-                    }]);
-                    setSelectedImageId(newImageId);
-                    setSelectedElementIds([]);
-                    setIsImageSelected(false);
-                };
-                img.src = `${API_URL}${data.imageUrl}`;
-                toast.success('Image added to canvas');
-            } else {
-                // First upload - set as main background image
-                setMapImageUrl(data.imageUrl);
-                // Clear eraser strokes and reset image position for new image
-                setEraserStrokes([]);
-                setEraserHistory([]);
-                setEraserHistoryStep(-1);
-                setMapImagePosition({ x: 0, y: 0 });
-                setMapImageSize({ width: CANVAS_WIDTH, height: CANVAS_HEIGHT });
-                setMode('builder');
-                toast.success('Map image uploaded successfully');
-            }
+                // Position: center for first image, offset for subsequent
+                const x = isFirstImage ? (CANVAS_WIDTH - width) / 2 : 100 + (uploadedImages.length * 20);
+                const y = isFirstImage ? (CANVAS_HEIGHT - height) / 2 : 100 + (uploadedImages.length * 20);
+
+                setUploadedImages(prev => [...prev, {
+                    id: newImageId,
+                    url: data.imageUrl,
+                    image: img,
+                    x,
+                    y,
+                    width,
+                    height,
+                    eraserStrokes: [],
+                }]);
+                setSelectedImageIds([newImageId]);
+                setSelectedElementIds([]);
+                setIsImageSelected(false);
+            };
+            img.src = `${API_URL}${data.imageUrl}`;
+            toast.success('Image added to canvas');
         } catch (error: any) {
             console.error('Upload error:', error);
             toast.error(error.message || 'Failed to upload image');
@@ -1070,6 +1410,14 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             const staticPointerHeight = (element.height || 55) * 0.3;
             centerX = element.x; // Already horizontally centered
             centerY = element.y - staticPointerHeight - (staticPinHeight / 2); // Center of the rectangle
+        } else if (element.type === 'device-pin') {
+            // Device pin's anchor is at the bottom of the stand base
+            // The screen body is drawn above the stand
+            const devicePinHeight = element.height || 60;
+            const screenHeight = devicePinHeight * 0.70;
+            const standHeight = devicePinHeight * 0.30;
+            centerX = element.x; // Already horizontally centered
+            centerY = element.y - standHeight - (screenHeight / 2); // Center of the screen
         } else if (element.type === 'smart-pin') {
             // Smart pin's anchor (element.x, element.y) is at the tip of the teardrop (bottom)
             // The circle is drawn above it
@@ -1245,6 +1593,23 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     ...defaultStaticPin,
                 } as MapElement;
                 break;
+            case 'device-pin':
+                // Calculate offset to center the device pin visually
+                // Screen body is 70% of height, stand+pointer is 30%
+                const deviceScreenHeight = (size.height || 60) * 0.55;
+                const deviceStandHeight = (size.height || 60) * 0.45;
+                const devicePinVisualCenterOffset = deviceStandHeight + deviceScreenHeight / 2;
+                newElement = {
+                    id,
+                    type: 'device-pin',
+                    name: '',
+                    x: x,
+                    y: y + devicePinVisualCenterOffset,
+                    width: size.width,
+                    height: size.height,
+                    ...defaultDevicePin,
+                } as MapElement;
+                break;
         }
 
         if (newElement) {
@@ -1262,13 +1627,13 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
 
             // Auto-start label editing for elements (excluding smart-pin, line, arrow)
             if (newElement.type === 'text') {
-                // For text elements, edit text directly
+                // For text elements, use inline cursor editing (same as other elements)
                 const center = getElementCenter(newElement);
                 setEditingLabelPosition(center);
-                setEditingTextValue(newElement.text || '');
-                setEditingTextId(newElement.id);
-            } else if (newElement.type === 'static-pin') {
-                // For static pins, edit pinLabel
+                setEditingLabelValue(''); // Start with empty - user types to replace default text
+                setEditingLabelId(newElement.id);
+            } else if (newElement.type === 'static-pin' || newElement.type === 'device-pin') {
+                // For static pins and device pins, edit pinLabel
                 const center = getElementCenter(newElement);
                 setEditingLabelPosition(center);
                 setEditingLabelValue('');
@@ -1289,10 +1654,10 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 const result = await createElementInDb(newElement);
                 if (result.success && result.dbId) {
                     const newDbId = result.dbId!.toString();
-                    // Update the element's ID to the database ID
+                    // Update the element's ID to the database ID and mark as persisted
                     setElements(prev => prev.map(el =>
                         el.id === tempId
-                            ? { ...el, id: newDbId, metadata: { ...el.metadata, frontendId: tempId } }
+                            ? { ...el, id: newDbId, persisted: true, metadata: { ...el.metadata, frontendId: tempId } }
                             : el
                     ));
                     // Update selection to use new ID
@@ -1368,6 +1733,29 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         e.preventDefault();
     };
 
+    // Helper function to find which uploaded image is under the cursor
+    const findImageAtPosition = (x: number, y: number): string | null => {
+        // Check uploaded images in reverse order (top-most first)
+        for (let i = uploadedImagesRef.current.length - 1; i >= 0; i--) {
+            const img = uploadedImagesRef.current[i];
+            if (img.image &&
+                x >= img.x && x <= img.x + img.width &&
+                y >= img.y && y <= img.y + img.height) {
+                return img.id;
+            }
+        }
+        // Also check legacy mapImage if it exists
+        if (mapImage) {
+            const imgX = mapImagePositionRef.current.x;
+            const imgY = mapImagePositionRef.current.y;
+            if (x >= imgX && x <= imgX + mapImageSize.width &&
+                y >= imgY && y <= imgY + mapImageSize.height) {
+                return '__legacy_map_image__';
+            }
+        }
+        return null;
+    };
+
     // Click-to-place element creation (fallback or for specific tools)
     const handleStageClick = (e: any) => {
         // If we're naming an element, finish naming first
@@ -1423,12 +1811,25 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         }
 
         // Handle eraser drawing (store positions relative to image)
-        if (isErasing && tool === 'eraser' && mapImage) {
+        if (isErasing && tool === 'eraser' && erasingImageIdRef.current) {
             const pos = getCanvasPositionFromKonvaEvent(e);
             if (!pos) return;
-            const relX = pos.x - mapImagePositionRef.current.x;
-            const relY = pos.y - mapImagePositionRef.current.y;
-            setCurrentEraserStroke(prev => [...prev, relX, relY]);
+
+            // Get the image being erased
+            if (erasingImageIdRef.current === '__legacy_map_image__') {
+                // Legacy mapImage
+                const relX = pos.x - mapImagePositionRef.current.x;
+                const relY = pos.y - mapImagePositionRef.current.y;
+                setCurrentEraserStroke(prev => [...prev, relX, relY]);
+            } else {
+                // Uploaded image
+                const img = uploadedImagesRef.current.find(i => i.id === erasingImageIdRef.current);
+                if (img) {
+                    const relX = pos.x - img.x;
+                    const relY = pos.y - img.y;
+                    setCurrentEraserStroke(prev => [...prev, relX, relY]);
+                }
+            }
         }
     };
 
@@ -1460,7 +1861,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     if (result.success && result.dbId) {
                         setElements(prev => prev.map(el =>
                             el.id === tempId
-                                ? { ...el, id: result.dbId!.toString(), metadata: { ...el.metadata, frontendId: tempId } }
+                                ? { ...el, id: result.dbId!.toString(), persisted: true, metadata: { ...el.metadata, frontendId: tempId } }
                                 : el
                         ));
                         setSelectedElementIds(prev => prev.map(id =>
@@ -1476,23 +1877,39 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         }
 
         // Handle eraser stroke completion
-        if (isErasing && tool === 'eraser') {
+        if (isErasing && tool === 'eraser' && erasingImageIdRef.current) {
             if (currentEraserStroke.length > 2) {
                 // Add the completed stroke with the eraser size
                 const newStroke = [...currentEraserStroke, eraserSizeRef.current];
-                const newStrokes = [...eraserStrokesRef.current, newStroke];
-                setEraserStrokes(newStrokes);
 
-                // Add to eraser history for undo support
-                setEraserHistory(prev => {
-                    // If we're not at the end of history, truncate future states
-                    const newHistory = prev.slice(0, eraserHistoryStep + 1);
-                    return [...newHistory, newStrokes];
-                });
-                setEraserHistoryStep(prev => prev + 1);
+                if (erasingImageIdRef.current === '__legacy_map_image__') {
+                    // Legacy mapImage - use existing eraserStrokes state
+                    const previousStrokes = [...eraserStrokesRef.current];
+                    const newStrokes = [...previousStrokes, newStroke];
+                    setEraserStrokes(newStrokes);
+
+                    // Save to unified history for undo support
+                    saveEraserToHistory(null, previousStrokes, newStroke);
+                } else {
+                    // Uploaded image - update the image's eraserStrokes
+                    const imageId = erasingImageIdRef.current!;
+                    const currentImage = uploadedImagesRef.current.find(img => img.id === imageId);
+                    const previousStrokes = currentImage ? [...currentImage.eraserStrokes] : [];
+
+                    // Save to unified history for undo support
+                    saveEraserToHistory(imageId, previousStrokes, newStroke);
+
+                    // Update the image's eraser strokes
+                    setUploadedImages(prev => prev.map(img =>
+                        img.id === imageId
+                            ? { ...img, eraserStrokes: [...img.eraserStrokes, newStroke] }
+                            : img
+                    ));
+                }
                 setHasUnsavedChanges(true);
             }
             setIsErasing(false);
+            setErasingImageId(null);
             setCurrentEraserStroke([]);
         }
     };
@@ -1511,6 +1928,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             parallelogram: 'Parallelogram',
             'smart-pin': 'Smart Pin',
             'static-pin': 'Static Pin',
+            'device-pin': 'Device Pin',
+            'group': 'Group',
         };
         return names[type] || 'Element';
     };
@@ -1547,12 +1966,19 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     // Finish label editing
     const finishLabelEdit = (save: boolean) => {
         if (editingLabelId) {
-            if (save && editingLabelValue.trim()) {
-                // Update the element's name (pinLabel for static pins, name for other elements)
+            if (save) {
+                // Update the element's property based on type:
+                // - static-pin: pinLabel property
+                // - text: text property
+                // - other shapes: name property (shows in layers panel)
                 const element = elements.find(el => el.id === editingLabelId);
                 if (element) {
-                    if (element.type === 'static-pin') {
+                    if (element.type === 'static-pin' || element.type === 'device-pin') {
                         updateElement(editingLabelId, { pinLabel: editingLabelValue.trim() });
+                    } else if (element.type === 'text') {
+                        // For text elements, update the text property
+                        const newText = editingLabelValue.trim() || 'Text'; // Default to 'Text' if empty
+                        updateElement(editingLabelId, { text: newText });
                     } else {
                         // For other shapes, update the name property so it shows in layers panel
                         updateElement(editingLabelId, { name: editingLabelValue.trim() });
@@ -1586,17 +2012,17 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             return;
         }
 
-        // For text elements, edit the text directly
+        // For text elements, use inline cursor editing (same as other elements)
         if (element.type === 'text') {
             const center = getElementCenter(element);
             setEditingLabelPosition(center);
-            setEditingTextValue(element.text || '');
-            setEditingTextId(elementId);
+            setEditingLabelValue(element.text || '');
+            setEditingLabelId(elementId);
             return;
         }
 
-        // For static pins, edit pinLabel
-        if (element.type === 'static-pin') {
+        // For static pins and device pins, edit pinLabel
+        if (element.type === 'static-pin' || element.type === 'device-pin') {
             const center = getElementCenter(element);
             setEditingLabelPosition(center);
             setEditingLabelValue(element.pinLabel || '');
@@ -1611,19 +2037,73 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         setEditingLabelId(elementId);
     };
 
-    // Save current state to history (for undo/redo)
+    // Save element state to unified history (for undo/redo)
     const saveToHistory = (newElements: MapElement[]) => {
-        const newHistory = history.slice(0, historyStep + 1);
-        newHistory.push(JSON.parse(JSON.stringify(newElements))); // Deep copy
-        // Limit history to 50 steps
-        if (newHistory.length > 50) {
-            newHistory.shift();
-            setHistory(newHistory);
-            setHistoryStep(newHistory.length - 1);
-        } else {
-            setHistory(newHistory);
-            setHistoryStep(newHistory.length - 1);
-        }
+        const action: HistoryAction = { type: 'elements', elements: JSON.parse(JSON.stringify(newElements)) };
+        // Use ref to get the latest history step (avoids stale closure issues)
+        const currentStep = unifiedHistoryStepRef.current;
+        setUnifiedHistory(prev => {
+            const newHistory = prev.slice(0, currentStep + 1);
+            newHistory.push(action);
+            // Limit history to 50 steps
+            if (newHistory.length > 50) {
+                newHistory.shift();
+                return newHistory;
+            }
+            return newHistory;
+        });
+        setUnifiedHistoryStep(prev => Math.min(prev + 1, 49));
+    };
+
+    // Save eraser stroke to unified history
+    const saveEraserToHistory = (imageId: string | null, previousStrokes: number[][], addedStroke: number[]) => {
+        const action: HistoryAction = imageId
+            ? { type: 'uploadedImageEraser', imageId, previousStrokes, addedStroke }
+            : { type: 'legacyEraser', previousStrokes, addedStroke };
+        // Use ref to get the latest history step (avoids stale closure issues)
+        const currentStep = unifiedHistoryStepRef.current;
+        setUnifiedHistory(prev => {
+            const newHistory = prev.slice(0, currentStep + 1);
+            newHistory.push(action);
+            if (newHistory.length > 50) {
+                newHistory.shift();
+                return newHistory;
+            }
+            return newHistory;
+        });
+        setUnifiedHistoryStep(prev => Math.min(prev + 1, 49));
+    };
+
+    // Save uploaded images state to unified history (for undo/redo of image deletion)
+    const saveImagesToHistory = (previousImages: typeof uploadedImages, afterImages: typeof uploadedImages) => {
+        const mapImages = (images: typeof uploadedImages): UploadedImageData[] =>
+            images.map(img => ({
+                id: img.id,
+                url: img.url,
+                x: img.x,
+                y: img.y,
+                width: img.width,
+                height: img.height,
+                eraserStrokes: img.eraserStrokes,
+            }));
+
+        const action: HistoryAction = {
+            type: 'uploadedImages',
+            previousImages: mapImages(previousImages),
+            afterImages: mapImages(afterImages),
+        };
+        // Use ref to get the latest history step (avoids stale closure issues)
+        const currentStep = unifiedHistoryStepRef.current;
+        setUnifiedHistory(prev => {
+            const newHistory = prev.slice(0, currentStep + 1);
+            newHistory.push(action);
+            if (newHistory.length > 50) {
+                newHistory.shift();
+                return newHistory;
+            }
+            return newHistory;
+        });
+        setUnifiedHistoryStep(prev => Math.min(prev + 1, 49));
     };
 
     // Sync database with a new element state (for undo/redo)
@@ -1661,8 +2141,9 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 // Element was never saved to DB, create it now
                 const result = await createElementInDb(el);
                 if (result.success && result.dbId) {
-                    // Update the element's ID in the target state
+                    // Update the element's ID in the target state and mark as persisted
                     el.id = result.dbId.toString();
+                    el.persisted = true;
                     el.metadata = { ...el.metadata, frontendId: el.id };
                 }
             }
@@ -1671,8 +2152,9 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             else {
                 const result = await createElementInDb(el);
                 if (result.success && result.dbId) {
-                    // The element gets a new DB ID
+                    // The element gets a new DB ID and mark as persisted
                     el.id = result.dbId.toString();
+                    el.persisted = true;
                     el.metadata = { ...el.metadata, frontendId: el.id };
                 }
             }
@@ -1686,82 +2168,181 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         return targetElements;
     }, [deleteElementFromDb, createElementInDb, updateElementInDb]);
 
-    // Undo
+    // Undo - uses unified history in proper chronological order
     const handleUndo = useCallback(async () => {
-        // First check if there are eraser strokes to undo
-        if (eraserHistoryStep >= 0) {
-            if (eraserHistoryStep === 0) {
-                // Going back to no eraser strokes
-                setEraserStrokes([]);
-                setEraserHistoryStep(-1);
-            } else {
-                // Go back to previous eraser state
-                setEraserStrokes(eraserHistory[eraserHistoryStep - 1]);
-                setEraserHistoryStep(prev => prev - 1);
-            }
-            toast.success('Eraser stroke undone');
-            return;
-        }
-
-        // Then check element history
-        if (historyStep > 0) {
-            isUndoRedoRef.current = true;
-            const currentElements = elementsRef.current;
-            const targetElements = JSON.parse(JSON.stringify(history[historyStep - 1]));
-
-            setHistoryStep(historyStep - 1);
-            setSelectedElementIds([]);
-
-            // Sync database with the target state
-            setAutoSaving(true);
-            const syncedElements = await syncDatabaseWithState(currentElements, targetElements);
-            setElements(syncedElements);
-            elementsRef.current = syncedElements;
-            setAutoSaving(false);
-
-            // Refresh publish status to reflect current draft state
-            fetchPublishStatus();
-
-            toast.success('Undone');
-        } else {
+        if (unifiedHistoryStep <= 0) {
             toast.error('Nothing to undo');
-        }
-    }, [historyStep, history, eraserHistoryStep, eraserHistory, syncDatabaseWithState, fetchPublishStatus]);
-
-    // Redo
-    const handleRedo = useCallback(async () => {
-        // First check if there are eraser strokes to redo
-        if (eraserHistoryStep < eraserHistory.length - 1) {
-            setEraserStrokes(eraserHistory[eraserHistoryStep + 1]);
-            setEraserHistoryStep(prev => prev + 1);
-            toast.success('Eraser stroke redone');
             return;
         }
 
-        // Then check element history
-        if (historyStep < history.length - 1) {
-            isUndoRedoRef.current = true;
-            const currentElements = elementsRef.current;
-            const targetElements = JSON.parse(JSON.stringify(history[historyStep + 1]));
+        const currentAction = unifiedHistory[unifiedHistoryStep];
+        setUnifiedHistoryStep(prev => prev - 1);
 
-            setHistoryStep(historyStep + 1);
-            setSelectedElementIds([]);
+        switch (currentAction.type) {
+            case 'elements':
+                // Find the previous elements state
+                let prevElementsAction: HistoryAction | null = null;
+                for (let i = unifiedHistoryStep - 1; i >= 0; i--) {
+                    if (unifiedHistory[i].type === 'elements') {
+                        prevElementsAction = unifiedHistory[i];
+                        break;
+                    }
+                }
+                const targetElements = prevElementsAction && prevElementsAction.type === 'elements'
+                    ? JSON.parse(JSON.stringify(prevElementsAction.elements))
+                    : [];
 
-            // Sync database with the target state
-            setAutoSaving(true);
-            const syncedElements = await syncDatabaseWithState(currentElements, targetElements);
-            setElements(syncedElements);
-            elementsRef.current = syncedElements;
-            setAutoSaving(false);
+                isUndoRedoRef.current = true;
+                const currentElements = elementsRef.current;
+                setSelectedElementIds([]);
 
-            // Refresh publish status to reflect current draft state
-            fetchPublishStatus();
+                // Sync database with the target state
+                const syncedElements = await syncDatabaseWithState(currentElements, targetElements);
+                setElements(syncedElements);
+                elementsRef.current = syncedElements;
+                fetchPublishStatus();
+                toast.success('Undone');
+                break;
 
-            toast.success('Redone');
-        } else {
-            toast.error('Nothing to redo');
+            case 'uploadedImageEraser':
+                // Restore previous strokes for this image
+                setUploadedImages(prev => prev.map(img =>
+                    img.id === currentAction.imageId
+                        ? { ...img, eraserStrokes: currentAction.previousStrokes }
+                        : img
+                ));
+                toast.success('Eraser stroke undone');
+                break;
+
+            case 'legacyEraser':
+                // Restore previous legacy eraser strokes
+                setEraserStrokes(currentAction.previousStrokes);
+                toast.success('Eraser stroke undone');
+                break;
+
+            case 'uploadedImages':
+                // Undo: Restore the previousImages state (before the deletion/change)
+                const restoredImages = currentAction.previousImages.map(imgData => {
+                    // Try to find existing image with same id to reuse its HTMLImageElement
+                    const existing = uploadedImages.find(img => img.id === imgData.id);
+                    return {
+                        ...imgData,
+                        image: existing?.image || null as HTMLImageElement | null
+                    };
+                });
+
+                // First set the state with null images, then load them
+                setUploadedImages(restoredImages);
+
+                // Reload any images that don't have HTMLImageElement
+                restoredImages.forEach((imgData, index) => {
+                    if (!imgData.image && imgData.url) {
+                        const img = new window.Image();
+                        img.crossOrigin = 'anonymous';
+                        img.onload = () => {
+                            setUploadedImages(prev => {
+                                const updated = [...prev];
+                                if (updated[index]) {
+                                    updated[index] = { ...updated[index], image: img };
+                                }
+                                return updated;
+                            });
+                        };
+                        img.onerror = () => {
+                            console.warn(`Failed to load restored image: ${imgData.url}`);
+                        };
+                        // Add API_URL prefix if URL is relative (starts with /)
+                        img.src = imgData.url.startsWith('/') ? `${API_URL}${imgData.url}` : imgData.url;
+                    }
+                });
+
+                toast.success('Image restored');
+                break;
         }
-    }, [historyStep, history, eraserHistoryStep, eraserHistory, syncDatabaseWithState, fetchPublishStatus]);
+    }, [unifiedHistoryStep, unifiedHistory, syncDatabaseWithState, fetchPublishStatus, uploadedImages]);
+
+    // Redo - uses unified history in proper chronological order
+    const handleRedo = useCallback(async () => {
+        if (unifiedHistoryStep >= unifiedHistory.length - 1) {
+            toast.error('Nothing to redo');
+            return;
+        }
+
+        const nextStep = unifiedHistoryStep + 1;
+        const nextAction = unifiedHistory[nextStep];
+        setUnifiedHistoryStep(nextStep);
+
+        switch (nextAction.type) {
+            case 'elements':
+                isUndoRedoRef.current = true;
+                const currentElements = elementsRef.current;
+                const targetElements = JSON.parse(JSON.stringify(nextAction.elements));
+                setSelectedElementIds([]);
+
+                // Sync database with the target state
+                const syncedElements = await syncDatabaseWithState(currentElements, targetElements);
+                setElements(syncedElements);
+                elementsRef.current = syncedElements;
+                fetchPublishStatus();
+                toast.success('Redone');
+                break;
+
+            case 'uploadedImageEraser':
+                // Re-add the stroke that was removed during undo
+                setUploadedImages(prev => prev.map(img =>
+                    img.id === nextAction.imageId
+                        ? { ...img, eraserStrokes: [...nextAction.previousStrokes, nextAction.addedStroke] }
+                        : img
+                ));
+                toast.success('Eraser stroke redone');
+                break;
+
+            case 'legacyEraser':
+                // Re-add the stroke that was removed during undo
+                setEraserStrokes([...nextAction.previousStrokes, nextAction.addedStroke]);
+                toast.success('Eraser stroke redone');
+                break;
+
+            case 'uploadedImages':
+                // Redo: Apply the afterImages state (after the deletion/change)
+                const redoneImages = nextAction.afterImages.map(imgData => {
+                    // Try to find existing image with same id to reuse its HTMLImageElement
+                    const existing = uploadedImages.find(img => img.id === imgData.id);
+                    return {
+                        ...imgData,
+                        image: existing?.image || null as HTMLImageElement | null
+                    };
+                });
+
+                // First set the state
+                setUploadedImages(redoneImages);
+
+                // Reload any images that don't have HTMLImageElement
+                redoneImages.forEach((imgData, index) => {
+                    if (!imgData.image && imgData.url) {
+                        const img = new window.Image();
+                        img.crossOrigin = 'anonymous';
+                        img.onload = () => {
+                            setUploadedImages(prev => {
+                                const updated = [...prev];
+                                if (updated[index]) {
+                                    updated[index] = { ...updated[index], image: img };
+                                }
+                                return updated;
+                            });
+                        };
+                        img.onerror = () => {
+                            console.warn(`Failed to load redone image: ${imgData.url}`);
+                        };
+                        // Add API_URL prefix if URL is relative (starts with /)
+                        img.src = imgData.url.startsWith('/') ? `${API_URL}${imgData.url}` : imgData.url;
+                    }
+                });
+
+                toast.success('Image action redone');
+                break;
+        }
+    }, [unifiedHistoryStep, unifiedHistory, syncDatabaseWithState, fetchPublishStatus, uploadedImages]);
 
     // Cut (copy + delete)
     const handleCut = useCallback(() => {
@@ -1905,12 +2486,12 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 }
             }
 
-            // Update element IDs to database IDs
+            // Update element IDs to database IDs and mark as persisted
             if (idMappings.length > 0) {
                 setElements(prev => prev.map(el => {
                     const mapping = idMappings.find(m => m.tempId === el.id);
                     if (mapping) {
-                        return { ...el, id: mapping.dbId.toString(), metadata: { ...el.metadata, frontendId: mapping.tempId } };
+                        return { ...el, id: mapping.dbId.toString(), persisted: true, metadata: { ...el.metadata, frontendId: mapping.tempId } };
                     }
                     return el;
                 }));
@@ -1923,6 +2504,82 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             }
         })();
     }, [copiedElements, elements, pasteCount, deepCloneElement, createElementInDb]);
+
+    // Duplicate selected elements (Ctrl+D)
+    const handleDuplicate = useCallback(() => {
+        if (selectedElementIds.length === 0) {
+            toast.error('No elements selected to duplicate');
+            return;
+        }
+
+        const DUPLICATE_OFFSET = 30;
+        const elementsToDuplicate = elements.filter(el => selectedElementIds.includes(el.id));
+        const newDuplicatedElements: MapElement[] = [];
+        const baseTimestamp = Date.now();
+
+        elementsToDuplicate.forEach((element, index) => {
+            const id = `duplicate-${baseTimestamp}-${index}-${Math.random().toString(36).substring(2, 11)}`;
+            const newElement: MapElement = deepCloneElement(element);
+
+            newElement.id = id;
+            newElement.zIndex = elements.length + newDuplicatedElements.length;
+
+            if (newElement.type === 'line' || newElement.type === 'arrow') {
+                if (newElement.points) {
+                    newElement.points = newElement.points.map((p, i) =>
+                        i % 2 === 0 ? p + DUPLICATE_OFFSET : p + DUPLICATE_OFFSET
+                    );
+                }
+            } else if (newElement.type === 'freehand') {
+                if (newElement.freehandPoints) {
+                    newElement.freehandPoints = newElement.freehandPoints.map((p, i) =>
+                        i % 2 === 0 ? p + DUPLICATE_OFFSET : p + DUPLICATE_OFFSET
+                    );
+                }
+            } else {
+                newElement.x = element.x + DUPLICATE_OFFSET;
+                newElement.y = element.y + DUPLICATE_OFFSET;
+            }
+
+            newDuplicatedElements.push(newElement);
+        });
+
+        setElements(prev => {
+            const newElements = [...prev, ...newDuplicatedElements];
+            elementsRef.current = newElements;
+            return newElements;
+        });
+
+        const newSelectedIds = newDuplicatedElements.map(el => el.id);
+        selectedElementIdsRef.current = newSelectedIds;
+        setSelectedElementIds(newSelectedIds);
+
+        toast.success(`Duplicated ${newDuplicatedElements.length} element${newDuplicatedElements.length > 1 ? 's' : ''}`);
+
+        // Save to database
+        (async () => {
+            const idMappings: { tempId: string; dbId: number }[] = [];
+            for (const element of newDuplicatedElements) {
+                const result = await createElementInDb(element);
+                if (result.success && result.dbId) {
+                    idMappings.push({ tempId: element.id, dbId: result.dbId });
+                }
+            }
+            if (idMappings.length > 0) {
+                setElements(prev => prev.map(el => {
+                    const mapping = idMappings.find(m => m.tempId === el.id);
+                    if (mapping) {
+                        return { ...el, id: mapping.dbId.toString(), persisted: true };
+                    }
+                    return el;
+                }));
+                setSelectedElementIds(prev => prev.map(id => {
+                    const mapping = idMappings.find(m => m.tempId === id);
+                    return mapping ? mapping.dbId.toString() : id;
+                }));
+            }
+        })();
+    }, [selectedElementIds, elements, deepCloneElement, createElementInDb]);
 
     // Keyboard shortcuts - must be after handler definitions to avoid hoisting issues
     useEffect(() => {
@@ -2004,24 +2661,50 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                         handleCopy();
                     }
                     break;
+                case 'd':
+                    if (e.ctrlKey || e.metaKey) {
+                        // Ctrl+D: Duplicate
+                        e.preventDefault();
+                        handleDuplicate();
+                    }
+                    break;
                 case 'delete':
                 case 'backspace':
                     if (!editingTextId && !namingElementId && !editingLabelId) {
                         if (selectedElementIds.length > 0) {
                             // Delete all selected elements
                             selectedElementIds.forEach(id => handleDeleteElement(id));
-                        } else if (selectedImageId) {
-                            // Delete selected uploaded image
-                            setUploadedImages(prev => prev.filter(img => img.id !== selectedImageId));
-                            setSelectedImageId(null);
-                            setHasUnsavedChanges(true);
-                            toast.success('Image deleted');
+                        } else if (selectedImageIds.length > 0) {
+                            // Delete all selected uploaded images
+                            const imagesToDelete = uploadedImagesRef.current.filter(img => selectedImageIds.includes(img.id));
+                            if (imagesToDelete.length > 0) {
+                                // Calculate state after deletion for history
+                                const previousImages = uploadedImagesRef.current;
+                                const afterImages = previousImages.filter(img => !selectedImageIds.includes(img.id));
+
+                                // Save both states to history (for undo/redo)
+                                saveImagesToHistory(previousImages, afterImages);
+
+                                // Delete from backend (for each image)
+                                imagesToDelete.forEach(img => {
+                                    if (img.url) {
+                                        fetch(`${API_URL}/api/admin/stores/${storeId}/map/image`, { method: 'DELETE' })
+                                            .catch(err => console.error('Failed to delete image from backend:', err));
+                                    }
+                                });
+                                // Delete from state
+                                setUploadedImages(afterImages);
+                                setSelectedImageIds([]);
+                                setHasUnsavedChanges(true);
+                                toast.success(`${imagesToDelete.length} image${imagesToDelete.length > 1 ? 's' : ''} deleted`);
+                            }
                         }
                     }
                     break;
                 case 'escape':
+                    setContextMenu(null); // Close context menu
                     setSelectedElementIds([]);
-                    setSelectedImageId(null);
+                    setSelectedImageIds([]);
                     setIsImageSelected(false);
                     setEditingTextId(null);
                     setNamingElementId(null);
@@ -2047,6 +2730,68 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                         handleResetZoom();
                     }
                     break;
+                case 'arrowup':
+                case 'arrowdown':
+                case 'arrowleft':
+                case 'arrowright':
+                    if (!editingTextId && !namingElementId && !editingLabelId) {
+                        e.preventDefault();
+
+                        const nudgeAmount = e.shiftKey ? 10 : 1;
+                        let deltaX = 0;
+                        let deltaY = 0;
+
+                        switch (e.key.toLowerCase()) {
+                            case 'arrowup': deltaY = -nudgeAmount; break;
+                            case 'arrowdown': deltaY = nudgeAmount; break;
+                            case 'arrowleft': deltaX = -nudgeAmount; break;
+                            case 'arrowright': deltaX = nudgeAmount; break;
+                        }
+
+                        if (selectedElementIds.length > 0) {
+                            const updates = new Map<string, Partial<MapElement>>();
+
+                            selectedElementIds.forEach(id => {
+                                const el = elementsRef.current.find(e => e.id === id);
+                                if (!el) return;
+
+                                if (el.type === 'line' || el.type === 'arrow') {
+                                    const points = el.points || [0, 0, 100, 0];
+                                    const newPoints = points.map((p, i) =>
+                                        i % 2 === 0 ? p + deltaX : p + deltaY
+                                    );
+                                    updates.set(el.id, { points: newPoints });
+                                } else if (el.type === 'freehand') {
+                                    const freehandPoints = el.freehandPoints || [];
+                                    const newPoints = freehandPoints.map((p, i) =>
+                                        i % 2 === 0 ? p + deltaX : p + deltaY
+                                    );
+                                    updates.set(el.id, { freehandPoints: newPoints });
+                                } else {
+                                    updates.set(el.id, {
+                                        x: el.x + deltaX,
+                                        y: el.y + deltaY,
+                                    });
+                                }
+                            });
+
+                            updateMultipleElements(updates);
+                        } else if (selectedImageIds.length > 0) {
+                            // Nudge selected images
+                            setUploadedImages(prev => prev.map(img => {
+                                if (selectedImageIds.includes(img.id)) {
+                                    return {
+                                        ...img,
+                                        x: img.x + deltaX,
+                                        y: img.y + deltaY,
+                                    };
+                                }
+                                return img;
+                            }));
+                            setHasUnsavedChanges(true);
+                        }
+                    }
+                    break;
             }
         };
 
@@ -2062,45 +2807,21 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         handleCopy,
         handlePaste,
         handleCut,
+        handleDuplicate,
         handleSelectAll,
         handleDeleteElement,
         handleZoomIn,
         handleZoomOut,
         handleResetZoom,
+        storeId,
+        selectedImageIds,
     ]);
-
-    const handleDeleteMap = async () => {
-        if (!confirm('Are you sure you want to delete the map?')) return;
-
-        await saveElements(elements);
-
-        setLoading(true);
-        try {
-            await fetch(`${API_URL}/api/admin/stores/${storeId}/map/image`, { method: 'DELETE' });
-            setMapImageUrl(null);
-            setMapImage(null);
-            setElements([]);
-            setSelectedElementIds([]);
-            // Clear eraser strokes and reset image position
-            setEraserStrokes([]);
-            setEraserHistory([]);
-            setEraserHistoryStep(-1);
-            setMapImagePosition({ x: 0, y: 0 });
-            setMapImageSize({ width: CANVAS_WIDTH, height: CANVAS_HEIGHT });
-            setMode('choice');
-            toast.success('Map deleted successfully');
-        } catch (error: any) {
-            toast.error(error.message || 'Failed to delete map');
-        } finally {
-            setLoading(false);
-        }
-    };
 
     const updateElement = (id: string, updates: Partial<MapElement>) => {
         // Check if this is an animation style change for a pin - trigger preview
         if (updates.animationStyle !== undefined) {
             const element = elementsRef.current.find(el => el.id === id);
-            if (element && (element.type === 'smart-pin' || element.type === 'static-pin')) {
+            if (element && (element.type === 'smart-pin' || element.type === 'static-pin' || element.type === 'device-pin')) {
                 // Only preview if animation is not 0 (Set animation)
                 if (updates.animationStyle !== 0) {
                     setAnimationPreview(prev => ({
@@ -2150,6 +2871,237 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         });
     };
 
+    // Flip element horizontally
+    const handleFlipHorizontal = (id: string) => {
+        const element = elementsRef.current.find(el => el.id === id);
+        if (!element) return;
+
+        if (element.type === 'line' || element.type === 'arrow') {
+            // For line/arrow, swap the x coordinates of points
+            const points = element.points || [0, 0, 100, 0];
+            const flippedPoints = [points[2], points[1], points[0], points[3]];
+            updateElement(id, { points: flippedPoints });
+        } else {
+            // For other elements, toggle scaleX
+            updateElement(id, { scaleX: (element.scaleX || 1) * -1 });
+        }
+    };
+
+    // Flip element vertically
+    const handleFlipVertical = (id: string) => {
+        const element = elementsRef.current.find(el => el.id === id);
+        if (!element) return;
+
+        if (element.type === 'line' || element.type === 'arrow') {
+            // For line/arrow, swap the y coordinates of points
+            const points = element.points || [0, 0, 100, 0];
+            const flippedPoints = [points[0], points[3], points[2], points[1]];
+            updateElement(id, { points: flippedPoints });
+        } else {
+            // For other elements, toggle scaleY
+            updateElement(id, { scaleY: (element.scaleY || 1) * -1 });
+        }
+    };
+
+    // Export canvas as PNG
+    const handleExportPNG = useCallback(() => {
+        if (!stageRef.current) return;
+
+        // Temporarily deselect elements to hide transformer
+        const currentSelection = selectedElementIds;
+        setSelectedElementIds([]);
+        setSelectedImageIds([]);
+
+        // Wait for re-render then export
+        setTimeout(() => {
+            try {
+                const dataURL = stageRef.current.toDataURL({
+                    pixelRatio: 2, // Higher quality
+                    x: 0,
+                    y: 0,
+                    width: CANVAS_WIDTH,
+                    height: CANVAS_HEIGHT,
+                });
+
+                // Create download link
+                const link = document.createElement('a');
+                link.download = `map-export-${Date.now()}.png`;
+                link.href = dataURL;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+
+                toast.success('Map exported as PNG');
+            } catch (error) {
+                console.error('Export failed:', error);
+                toast.error('Failed to export map');
+            }
+
+            // Restore selection
+            setSelectedElementIds(currentSelection);
+        }, 100);
+    }, [selectedElementIds]);
+
+    // Align selected elements
+    const handleAlign = useCallback((type: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom') => {
+        if (selectedElementIds.length < 2) return;
+
+        const selected = elementsRef.current.filter(el => selectedElementIds.includes(el.id));
+        if (selected.length < 2) return;
+
+        // Calculate bounding box of all selected elements
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        selected.forEach(el => {
+            const bounds = getElementBounds(el, el.x, el.y);
+            minX = Math.min(minX, bounds.left);
+            maxX = Math.max(maxX, bounds.right);
+            minY = Math.min(minY, bounds.top);
+            maxY = Math.max(maxY, bounds.bottom);
+        });
+
+        const updates = new Map<string, Partial<MapElement>>();
+
+        selected.forEach(el => {
+            const bounds = getElementBounds(el, el.x, el.y);
+            const elWidth = bounds.right - bounds.left;
+            const elHeight = bounds.bottom - bounds.top;
+
+            let newX = el.x;
+            let newY = el.y;
+
+            switch (type) {
+                case 'left':
+                    // Align left edges to the leftmost element
+                    newX = minX + (el.x - bounds.left);
+                    break;
+                case 'center':
+                    // Align horizontal centers
+                    const centerX = (minX + maxX) / 2;
+                    newX = centerX - elWidth / 2 + (el.x - bounds.left);
+                    break;
+                case 'right':
+                    // Align right edges to the rightmost element
+                    newX = maxX - elWidth + (el.x - bounds.left);
+                    break;
+                case 'top':
+                    // Align top edges to the topmost element
+                    newY = minY + (el.y - bounds.top);
+                    break;
+                case 'middle':
+                    // Align vertical centers
+                    const centerY = (minY + maxY) / 2;
+                    newY = centerY - elHeight / 2 + (el.y - bounds.top);
+                    break;
+                case 'bottom':
+                    // Align bottom edges to the bottommost element
+                    newY = maxY - elHeight + (el.y - bounds.top);
+                    break;
+            }
+
+            if (newX !== el.x || newY !== el.y) {
+                updates.set(el.id, { x: newX, y: newY });
+            }
+        });
+
+        if (updates.size > 0) {
+            updateMultipleElements(updates);
+        }
+    }, [selectedElementIds, updateMultipleElements]);
+
+    // Distribute selected elements evenly
+    const handleDistribute = useCallback((type: 'horizontal' | 'vertical') => {
+        if (selectedElementIds.length < 3) return;
+
+        const selected = elementsRef.current.filter(el => selectedElementIds.includes(el.id));
+        if (selected.length < 3) return;
+
+        // Sort elements by position
+        const sortedElements = [...selected].sort((a, b) => {
+            const boundsA = getElementBounds(a, a.x, a.y);
+            const boundsB = getElementBounds(b, b.x, b.y);
+            if (type === 'horizontal') {
+                return boundsA.centerX - boundsB.centerX;
+            } else {
+                return boundsA.centerY - boundsB.centerY;
+            }
+        });
+
+        // Get first and last element positions
+        const firstBounds = getElementBounds(sortedElements[0], sortedElements[0].x, sortedElements[0].y);
+        const lastBounds = getElementBounds(sortedElements[sortedElements.length - 1], sortedElements[sortedElements.length - 1].x, sortedElements[sortedElements.length - 1].y);
+
+        const firstCenter = type === 'horizontal' ? firstBounds.centerX : firstBounds.centerY;
+        const lastCenter = type === 'horizontal' ? lastBounds.centerX : lastBounds.centerY;
+
+        // Calculate spacing between elements
+        const totalDistance = lastCenter - firstCenter;
+        const spacing = totalDistance / (sortedElements.length - 1);
+
+        const updates = new Map<string, Partial<MapElement>>();
+
+        // Update positions (skip first and last which stay in place)
+        for (let i = 1; i < sortedElements.length - 1; i++) {
+            const el = sortedElements[i];
+            const bounds = getElementBounds(el, el.x, el.y);
+            const currentCenter = type === 'horizontal' ? bounds.centerX : bounds.centerY;
+            const targetCenter = firstCenter + spacing * i;
+            const offset = targetCenter - currentCenter;
+
+            if (type === 'horizontal') {
+                updates.set(el.id, { x: el.x + offset });
+            } else {
+                updates.set(el.id, { y: el.y + offset });
+            }
+        }
+
+        if (updates.size > 0) {
+            updateMultipleElements(updates);
+        }
+    }, [selectedElementIds, updateMultipleElements]);
+
+    // Z-order handlers for context menu
+    const handleBringForward = useCallback(() => {
+        if (selectedElementIds.length !== 1) return;
+        const id = selectedElementIds[0];
+        const sorted = [...elements].sort((a, b) => a.zIndex - b.zIndex);
+        const currentIdx = sorted.findIndex(el => el.id === id);
+        if (currentIdx < sorted.length - 1) {
+            const current = sorted[currentIdx];
+            const above = sorted[currentIdx + 1];
+            updateElement(current.id, { zIndex: above.zIndex });
+            updateElement(above.id, { zIndex: current.zIndex });
+        }
+        setContextMenu(null);
+    }, [selectedElementIds, elements, updateElement]);
+
+    const handleSendBackward = useCallback(() => {
+        if (selectedElementIds.length !== 1) return;
+        const id = selectedElementIds[0];
+        const sorted = [...elements].sort((a, b) => a.zIndex - b.zIndex);
+        const currentIdx = sorted.findIndex(el => el.id === id);
+        if (currentIdx > 0) {
+            const current = sorted[currentIdx];
+            const below = sorted[currentIdx - 1];
+            updateElement(current.id, { zIndex: below.zIndex });
+            updateElement(below.id, { zIndex: current.zIndex });
+        }
+        setContextMenu(null);
+    }, [selectedElementIds, elements, updateElement]);
+
+    const handleBringToFront = useCallback(() => {
+        if (selectedElementIds.length !== 1) return;
+        const maxZIndex = Math.max(...elements.map(el => el.zIndex), 0);
+        updateElement(selectedElementIds[0], { zIndex: maxZIndex + 1 });
+        setContextMenu(null);
+    }, [selectedElementIds, elements, updateElement]);
+
+    const handleSendToBack = useCallback(() => {
+        if (selectedElementIds.length !== 1) return;
+        const minZIndex = Math.min(...elements.map(el => el.zIndex), 0);
+        updateElement(selectedElementIds[0], { zIndex: minZIndex - 1 });
+        setContextMenu(null);
+    }, [selectedElementIds, elements, updateElement]);
+
     const handleToggleVisibility = (id: string) => {
         updateElement(id, { visible: !elements.find(el => el.id === id)?.visible });
     };
@@ -2165,6 +3117,35 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     };
 
     const selectedElement = selectedElementIds.length === 1 ? elements.find(el => el.id === selectedElementIds[0]) || null : null;
+
+    // Throttled color update to prevent crashes from rapid color picker changes
+    // Uses requestAnimationFrame to limit updates to once per frame (~60fps)
+    const pendingColorUpdateRef = useRef<{ id: string; color: string } | null>(null);
+    const colorUpdateFrameRef = useRef<number | null>(null);
+
+    const throttledColorUpdate = useCallback((id: string, color: string) => {
+        pendingColorUpdateRef.current = { id, color };
+
+        if (colorUpdateFrameRef.current === null) {
+            colorUpdateFrameRef.current = requestAnimationFrame(() => {
+                if (pendingColorUpdateRef.current) {
+                    const { id: elementId, color: newColor } = pendingColorUpdateRef.current;
+                    updateElement(elementId, { fillColor: newColor });
+                    pendingColorUpdateRef.current = null;
+                }
+                colorUpdateFrameRef.current = null;
+            });
+        }
+    }, [updateElement]);
+
+    // Cleanup animation frame on unmount
+    useEffect(() => {
+        return () => {
+            if (colorUpdateFrameRef.current !== null) {
+                cancelAnimationFrame(colorUpdateFrameRef.current);
+            }
+        };
+    }, []);
 
     // Get trapezoid points
     const getTrapezoidPoints = (width: number, height: number): number[] => {
@@ -2198,7 +3179,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     // Helper to get element bounds based on element type
     const getElementBounds = (element: MapElement, x: number, y: number) => {
         const isCentered = ['circle', 'polygon', 'triangle'].includes(element.type);
-        const isPin = ['smart-pin', 'static-pin'].includes(element.type);
+        const isPin = ['smart-pin', 'static-pin', 'device-pin'].includes(element.type);
 
         if (isCentered) {
             // For centered elements, (x, y) is the center
@@ -2244,7 +3225,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         snapType: { x: 'left' | 'right' | 'center' | null; y: 'top' | 'bottom' | 'center' | null }
     ) => {
         const isCentered = ['circle', 'polygon', 'triangle'].includes(element.type);
-        const isPin = ['smart-pin', 'static-pin'].includes(element.type);
+        const isPin = ['smart-pin', 'static-pin', 'device-pin'].includes(element.type);
 
         let resultX = snapX;
         let resultY = snapY;
@@ -2289,6 +3270,13 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
 
     // Smart guides helper - calculates alignment guides and snap position
     const SNAP_THRESHOLD = 20; // pixels - magnetic snap like Canva
+    const GRID_SIZE = 50; // Match visual grid size
+
+    // Snap position to grid intersection
+    const snapToGridPosition = useCallback((value: number): number => {
+        return Math.round(value / GRID_SIZE) * GRID_SIZE;
+    }, []);
+
     const calculateSmartGuides = useCallback((
         draggedElement: MapElement,
         currentX: number,
@@ -2439,6 +3427,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             x: element.x,
             y: element.y,
             rotation: element.rotation,
+            scaleX: element.scaleX || 1,
+            scaleY: element.scaleY || 1,
             draggable: !element.locked && tool === 'select',
             onClick: () => {
                 if (tool === 'eraser') {
@@ -2454,7 +3444,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     if (!currentlySelected) {
                         setSelectedElementIds([element.id]);
                         setIsImageSelected(false);
-                        setSelectedImageId(null);
+                        setSelectedImageIds([]);
                     }
                 }
             },
@@ -2471,7 +3461,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     if (!currentlySelected) {
                         setSelectedElementIds([element.id]);
                         setIsImageSelected(false);
-                        setSelectedImageId(null);
+                        setSelectedImageIds([]);
                     }
                 }
             },
@@ -2485,7 +3475,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 if (!currentlySelected) {
                     setSelectedElementIds([element.id]);
                     setIsImageSelected(false);
-                    setSelectedImageId(null);
+                    setSelectedImageIds([]);
                 }
 
                 // Store the starting positions of all selected elements for group drag
@@ -2563,29 +3553,39 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     // Clear guides for freehand
                     setSmartGuides({ vertical: [], horizontal: [] });
                 } else {
-                    // For regular shapes, calculate smart guides and apply magnetic snapping
-                    const { snapX, snapY, guides } = calculateSmartGuides(
-                        currentEl,
-                        currentX,
-                        currentY,
-                        elementsRef.current
-                    );
-
-                    // Apply magnetic snapping during drag (like Canva)
+                    // For regular shapes, apply snapping during drag
                     let snappedX = currentX;
                     let snappedY = currentY;
 
-                    if (snapX !== null) {
-                        snappedX = snapX;
-                        node.x(snapX);
-                    }
-                    if (snapY !== null) {
-                        snappedY = snapY;
-                        node.y(snapY);
-                    }
+                    if (snapToGrid) {
+                        // Grid snapping - snap to nearest grid intersection
+                        snappedX = snapToGridPosition(currentX);
+                        snappedY = snapToGridPosition(currentY);
+                        node.x(snappedX);
+                        node.y(snappedY);
+                        // Clear smart guides when using grid snap
+                        setSmartGuides({ vertical: [], horizontal: [] });
+                    } else {
+                        // Smart guides snapping
+                        const { snapX, snapY, guides } = calculateSmartGuides(
+                            currentEl,
+                            currentX,
+                            currentY,
+                            elementsRef.current
+                        );
 
-                    // Show guides during drag
-                    setSmartGuides(guides);
+                        if (snapX !== null) {
+                            snappedX = snapX;
+                            node.x(snapX);
+                        }
+                        if (snapY !== null) {
+                            snappedY = snapY;
+                            node.y(snapY);
+                        }
+
+                        // Show guides during drag
+                        setSmartGuides(guides);
+                    }
 
                     if (currentEl.type === 'smart-pin') {
                         // For smart pins, calculate toolbar position at top of pin during drag
@@ -2599,6 +3599,13 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                         const staticPointerHeight = (currentEl.height || 55) * 0.3;
                         toolbarX = snappedX;
                         toolbarY = snappedY - staticPinHeight - staticPointerHeight;
+                    } else if (currentEl.type === 'device-pin') {
+                        // For device pins, calculate toolbar position at top of screen during drag
+                        const devicePinHeight = currentEl.height || 60;
+                        const screenHeight = devicePinHeight * 0.70;
+                        const standHeight = devicePinHeight * 0.30;
+                        toolbarX = snappedX;
+                        toolbarY = snappedY - screenHeight - standHeight;
                     } else {
                         // For regular shapes, use snapped position
                         toolbarX = snappedX + currentEl.width / 2;
@@ -2720,16 +3727,23 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                         let finalX = startPos.x + deltaX;
                         let finalY = startPos.y + deltaY;
 
-                        // Calculate snap position (only if Ctrl/Cmd is not pressed)
+                        // Apply snapping (grid snap takes priority, then smart guides)
                         if (!isCtrlCmdPressedRef.current) {
-                            const { snapX, snapY } = calculateSmartGuides(
-                                currentElement,
-                                finalX,
-                                finalY,
-                                elementsRef.current
-                            );
-                            if (snapX !== null) finalX = snapX;
-                            if (snapY !== null) finalY = snapY;
+                            if (snapToGrid) {
+                                // Grid snapping - snap to nearest grid intersection
+                                finalX = snapToGridPosition(finalX);
+                                finalY = snapToGridPosition(finalY);
+                            } else {
+                                // Smart guides snapping
+                                const { snapX, snapY } = calculateSmartGuides(
+                                    currentElement,
+                                    finalX,
+                                    finalY,
+                                    elementsRef.current
+                                );
+                                if (snapX !== null) finalX = snapX;
+                                if (snapY !== null) finalY = snapY;
+                            }
                         }
 
                         updateElement(currentElement.id, {
@@ -2840,12 +3854,13 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                         <Rect
                             width={element.width}
                             height={element.height}
-                            fill={element.fillColor}
+                            {...getGradientProps(element)}
                             opacity={element.fillOpacity}
                             stroke={element.strokeColor}
                             strokeWidth={element.strokeWidth}
                             strokeOpacity={element.strokeOpacity}
                             cornerRadius={element.cornerRadius}
+                            dash={getStrokeDash(element.strokeStyle)}
                         />
                         {/* Selection highlight */}
                         {isSelected && (
@@ -2866,11 +3881,12 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     <Group key={element.id} {...commonProps}>
                         <Circle
                             radius={element.width / 2}
-                            fill={element.fillColor}
+                            {...getGradientProps(element)}
                             opacity={element.fillOpacity}
                             stroke={element.strokeColor}
                             strokeWidth={element.strokeWidth}
                             strokeOpacity={element.strokeOpacity}
+                            dash={getStrokeDash(element.strokeStyle)}
                         />
                         {renderLabel()}
                     </Group>
@@ -2886,6 +3902,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             stroke={element.strokeColor}
                             strokeWidth={element.strokeWidth}
                             strokeOpacity={element.strokeOpacity}
+                            dash={getStrokeDash(element.strokeStyle)}
                         />
                         {renderLabel()}
                     </Group>
@@ -2903,6 +3920,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             strokeOpacity={element.strokeOpacity}
                             lineJoin="round"
                             cornerRadius={element.cornerRadius || 0}
+                            dash={getStrokeDash(element.strokeStyle)}
                         />
                         {renderLabel()}
                     </Group>
@@ -2920,6 +3938,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             strokeOpacity={element.strokeOpacity}
                             lineJoin="round"
                             cornerRadius={element.cornerRadius || 0}
+                            dash={getStrokeDash(element.strokeStyle)}
                         />
                         {renderLabel()}
                     </Group>
@@ -2935,6 +3954,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             stroke={element.strokeColor}
                             strokeWidth={element.strokeWidth}
                             strokeOpacity={element.strokeOpacity}
+                            dash={getStrokeDash(element.strokeStyle)}
                         />
                         {renderLabel()}
                     </Group>
@@ -2948,6 +3968,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             strokeWidth={element.strokeWidth}
                             strokeOpacity={element.strokeOpacity}
                             hitStrokeWidth={40}
+                            dash={getStrokeDash(element.strokeStyle)}
                         />
                         {renderLabel()}
                     </Group>
@@ -2962,11 +3983,23 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             strokeOpacity={element.strokeOpacity}
                             fill={element.strokeColor}
                             hitStrokeWidth={40}
+                            dash={getStrokeDash(element.strokeStyle)}
                         />
                         {renderLabel()}
                     </Group>
                 );
             case 'text':
+                // Calculate shadow properties (either explicit shadow or glow effect)
+                const textShadowEnabled = element.textShadow?.enabled || element.textGlow?.enabled;
+                const textShadowColor = element.textGlow?.enabled
+                    ? element.textGlow.color
+                    : (element.textShadow?.color || '#000000');
+                const textShadowBlur = element.textGlow?.enabled
+                    ? element.textGlow.blur
+                    : (element.textShadow?.blur || 0);
+                const textShadowOffsetX = element.textGlow?.enabled ? 0 : (element.textShadow?.offsetX || 0);
+                const textShadowOffsetY = element.textGlow?.enabled ? 0 : (element.textShadow?.offsetY || 0);
+
                 return (
                     <Group key={element.id} {...commonProps}>
                         {/* Background rectangle with corner radius */}
@@ -2979,16 +4012,31 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                 cornerRadius={element.cornerRadius || 0}
                             />
                         )}
-                        <KonvaText
-                            text={element.text || 'Text'}
-                            fontSize={element.fontSize}
-                            fontFamily={element.fontFamily}
-                            fontStyle={element.fontWeight}
-                            fill={element.fillColor}
-                            align={element.textAlign}
-                            width={element.width}
-                            padding={10}
-                        />
+                        {/* Text content - hidden while editing */}
+                        {editingLabelId !== element.id && (
+                            <KonvaText
+                                text={element.text || 'Text'}
+                                fontSize={element.fontSize}
+                                fontFamily={element.fontFamily}
+                                fontStyle={element.fontWeight}
+                                fill={element.fillColor}
+                                align={element.textAlign}
+                                width={element.width}
+                                padding={10}
+                                letterSpacing={element.letterSpacing || 0}
+                                lineHeight={element.lineHeight || 1}
+                                textDecoration={element.textDecoration || 'none'}
+                                // Shadow and glow effects
+                                shadowEnabled={textShadowEnabled}
+                                shadowColor={textShadowColor}
+                                shadowBlur={textShadowBlur}
+                                shadowOffsetX={textShadowOffsetX}
+                                shadowOffsetY={textShadowOffsetY}
+                                // Outline effect (stroke)
+                                stroke={element.textOutline?.enabled ? element.textOutline.color : undefined}
+                                strokeWidth={element.textOutline?.enabled ? element.textOutline.width : 0}
+                            />
+                        )}
                     </Group>
                 );
             case 'freehand':
@@ -3003,6 +4051,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             lineCap="round"
                             lineJoin="round"
                             hitStrokeWidth={20}
+                            dash={getStrokeDash(element.strokeStyle)}
                         />
                         {renderLabel()}
                     </Group>
@@ -3011,6 +4060,11 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 const { size: smartSize, radius: smartRadius } = getTeardropPinSize(element);
                 const smartCircleY = -smartRadius - smartRadius * 0.2;
                 const smartInnerRadius = smartRadius * 0.45;
+                // Ensure valid color values with fallbacks
+                const smartFillColor = element.fillColor || '#ef4444';
+                const smartStrokeColor = element.strokeColor || '#b91c1c';
+                const smartFillOpacity = element.fillOpacity ?? 1;
+                const smartStrokeWidth = element.strokeWidth ?? 2;
                 return (
                     <Group key={element.id} {...commonProps}>
                         {/* Teardrop outer circle */}
@@ -3018,10 +4072,10 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             x={0}
                             y={smartCircleY}
                             radius={smartRadius}
-                            fill={element.fillColor}
-                            opacity={element.fillOpacity}
-                            stroke={element.strokeColor}
-                            strokeWidth={element.strokeWidth}
+                            fill={smartFillColor}
+                            opacity={smartFillOpacity}
+                            stroke={smartStrokeColor}
+                            strokeWidth={smartStrokeWidth}
                         />
                         {/* Bottom triangle point */}
                         <Line
@@ -3031,10 +4085,10 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                 0, smartSize * 0.35,
                             ]}
                             closed={true}
-                            fill={element.fillColor}
-                            opacity={element.fillOpacity}
-                            stroke={element.strokeColor}
-                            strokeWidth={element.strokeWidth}
+                            fill={smartFillColor}
+                            opacity={smartFillOpacity}
+                            stroke={smartStrokeColor}
+                            strokeWidth={smartStrokeWidth}
                             lineJoin="round"
                         />
                         {/* Cover stroke between circle and triangle */}
@@ -3043,9 +4097,9 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                 -smartRadius * 0.65, smartCircleY + smartRadius * 0.5,
                                 smartRadius * 0.65, smartCircleY + smartRadius * 0.5,
                             ]}
-                            stroke={element.fillColor}
+                            stroke={smartFillColor}
                             strokeWidth={4}
-                            opacity={element.fillOpacity}
+                            opacity={smartFillOpacity}
                             listening={false}
                         />
                         {/* Inner white circle (hollow center) */}
@@ -3076,9 +4130,15 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 const staticPinHeight = (element.height || 55) * 0.7; // Rectangle body height
                 const staticPointerHeight = (element.height || 55) * 0.3; // Pointer triangle height
                 const staticCornerRadius = 6;
-                const labelFontSize = element.pinLabelFontSize || 12;
+                const labelFontSize = element.pinLabelFontSize || 16;
                 const labelColor = element.pinLabelColor || '#ffffff';
-                const labelFontWeight = element.pinLabelFontWeight || 'bold';
+                const labelFontWeight = element.pinLabelFontWeight || 'normal';
+                const labelFontFamily = element.pinLabelFontFamily || 'Inter, system-ui, -apple-system, sans-serif';
+                // Ensure valid color values with fallbacks
+                const staticFillColor = element.fillColor || '#22c55e';
+                const staticStrokeColor = element.strokeColor || '#15803d';
+                const staticFillOpacity = element.fillOpacity ?? 1;
+                const staticStrokeWidth = element.strokeWidth ?? 2;
 
                 return (
                     <Group key={element.id} {...commonProps}>
@@ -3088,10 +4148,10 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             y={-staticPinHeight - staticPointerHeight}
                             width={staticPinWidth}
                             height={staticPinHeight}
-                            fill={element.fillColor}
-                            opacity={element.fillOpacity}
-                            stroke={element.strokeColor}
-                            strokeWidth={element.strokeWidth}
+                            fill={staticFillColor}
+                            opacity={staticFillOpacity}
+                            stroke={staticStrokeColor}
+                            strokeWidth={staticStrokeWidth}
                             cornerRadius={staticCornerRadius}
                         />
                         {/* Triangular pointer at bottom */}
@@ -3102,10 +4162,10 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                 0, 0,
                             ]}
                             closed={true}
-                            fill={element.fillColor}
-                            opacity={element.fillOpacity}
-                            stroke={element.strokeColor}
-                            strokeWidth={element.strokeWidth}
+                            fill={staticFillColor}
+                            opacity={staticFillOpacity}
+                            stroke={staticStrokeColor}
+                            strokeWidth={staticStrokeWidth}
                             lineJoin="round"
                         />
                         {/* Cover the stroke line between rectangle and pointer */}
@@ -3114,24 +4174,28 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                 -staticPinWidth * 0.18, -staticPointerHeight,
                                 staticPinWidth * 0.18, -staticPointerHeight,
                             ]}
-                            stroke={element.fillColor}
-                            strokeWidth={element.strokeWidth + 2}
-                            opacity={element.fillOpacity}
+                            stroke={staticFillColor}
+                            strokeWidth={staticStrokeWidth + 2}
+                            opacity={staticFillOpacity}
                             listening={false}
                         />
-                        {/* Pin label inside rectangle */}
-                        <KonvaText
-                            text={element.pinLabel || ''}
-                            x={-staticPinWidth / 2}
-                            y={-staticPinHeight - staticPointerHeight + (staticPinHeight - labelFontSize) / 2}
-                            width={staticPinWidth}
-                            fontSize={labelFontSize}
-                            fontFamily="Arial, sans-serif"
-                            fontStyle={labelFontWeight}
-                            fill={labelColor}
-                            align="center"
-                            listening={false}
-                        />
+                        {/* Pin label inside rectangle - hidden while editing */}
+                        {editingLabelId !== element.id && (
+                            <KonvaText
+                                text={element.pinLabel || ''}
+                                x={-staticPinWidth / 2}
+                                y={-staticPinHeight - staticPointerHeight}
+                                width={staticPinWidth}
+                                height={staticPinHeight}
+                                fontSize={labelFontSize}
+                                fontFamily={labelFontFamily}
+                                fontStyle={labelFontWeight}
+                                fill={labelColor}
+                                align="center"
+                                verticalAlign="middle"
+                                listening={false}
+                            />
+                        )}
                         {/* Selection highlight */}
                         {isSelected && (
                             <Rect
@@ -3142,6 +4206,96 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                 stroke="#3b82f6"
                                 strokeWidth={3}
                                 cornerRadius={staticCornerRadius}
+                                listening={false}
+                            />
+                        )}
+                        {renderLabel()}
+                    </Group>
+                );
+            case 'device-pin':
+                // Kiosk/screen design with monitor and stand (no pointer)
+                const devicePinWidth = element.width || 50;
+                const devicePinHeight = element.height || 60;
+                const screenHeight = devicePinHeight * 0.70; // Screen is 70% of total height
+                const standHeight = devicePinHeight * 0.30; // Stand neck + base is 30%
+                const screenCornerRadius = 4;
+                const deviceLabelFontSize = element.pinLabelFontSize || 14;
+                const deviceLabelColor = element.pinLabelColor || '#ffffff';
+                const deviceLabelFontWeight = element.pinLabelFontWeight || 'normal';
+                const deviceLabelFontFamily = element.pinLabelFontFamily || 'Inter, system-ui, -apple-system, sans-serif';
+                // Use a single color for the entire device pin (no separate stroke)
+                const deviceFillColor = element.fillColor || '#6366f1';
+                const deviceFillOpacity = element.fillOpacity ?? 1;
+
+                return (
+                    <Group key={element.id} {...commonProps}>
+                        {/* Screen/monitor body - no stroke, single color */}
+                        <Rect
+                            x={-devicePinWidth / 2}
+                            y={-screenHeight - standHeight}
+                            width={devicePinWidth}
+                            height={screenHeight}
+                            fill={deviceFillColor}
+                            opacity={deviceFillOpacity}
+                            cornerRadius={screenCornerRadius}
+                        />
+                        {/* Screen inner area (darker overlay for depth) */}
+                        <Rect
+                            x={-devicePinWidth / 2 + 4}
+                            y={-screenHeight - standHeight + 4}
+                            width={devicePinWidth - 8}
+                            height={screenHeight - 8}
+                            fill="#000000"
+                            opacity={0.25}
+                            cornerRadius={2}
+                            listening={false}
+                        />
+                        {/* Stand neck - same color as body */}
+                        <Rect
+                            x={-devicePinWidth * 0.1}
+                            y={-standHeight}
+                            width={devicePinWidth * 0.2}
+                            height={standHeight * 0.6}
+                            fill={deviceFillColor}
+                            opacity={deviceFillOpacity}
+                        />
+                        {/* Stand base - same color as body */}
+                        <Rect
+                            x={-devicePinWidth * 0.35}
+                            y={-standHeight * 0.4}
+                            width={devicePinWidth * 0.7}
+                            height={standHeight * 0.4}
+                            fill={deviceFillColor}
+                            opacity={deviceFillOpacity}
+                            cornerRadius={2}
+                        />
+                        {/* Pin label inside screen - hidden while editing */}
+                        {editingLabelId !== element.id && (
+                            <KonvaText
+                                text={element.pinLabel || ''}
+                                x={-devicePinWidth / 2 + 4}
+                                y={-screenHeight - standHeight + 4}
+                                width={devicePinWidth - 8}
+                                height={screenHeight - 8}
+                                fontSize={deviceLabelFontSize}
+                                fontFamily={deviceLabelFontFamily}
+                                fontStyle={deviceLabelFontWeight}
+                                fill={deviceLabelColor}
+                                align="center"
+                                verticalAlign="middle"
+                                listening={false}
+                            />
+                        )}
+                        {/* Selection highlight */}
+                        {isSelected && (
+                            <Rect
+                                x={-devicePinWidth / 2 - 2}
+                                y={-screenHeight - standHeight - 2}
+                                width={devicePinWidth + 4}
+                                height={screenHeight + 4}
+                                stroke="#3b82f6"
+                                strokeWidth={3}
+                                cornerRadius={screenCornerRadius}
                                 listening={false}
                             />
                         )}
@@ -3163,63 +4317,6 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         );
     }
 
-    if (mode === 'choice') {
-        return (
-            <div className="relative flex flex-col items-center justify-center h-[600px] gap-8 bg-muted/20 rounded-lg border-2 border-dashed border-border">
-                {/* Back to Map button - only show if user has existing work */}
-                {hasExistingWork && (
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        className="absolute top-4 right-4"
-                        onClick={() => setMode('builder')}
-                    >
-                        Back to Map
-                        <ArrowRight className="h-4 w-4 ml-2" />
-                    </Button>
-                )}
-
-                <div className="text-center space-y-2">
-                    <h2 className="text-2xl font-bold">Create Store Map</h2>
-                    <p className="text-muted-foreground">Choose how you want to create your store map</p>
-                </div>
-
-                <div className="flex gap-6">
-                    <Card className="w-64 hover:border-primary cursor-pointer transition-colors" onClick={() => setMode('builder')}>
-                        <CardHeader>
-                            <CardTitle className="flex flex-col items-center gap-4">
-                                <Hammer className="h-12 w-12 text-primary" />
-                                Build from Scratch
-                            </CardTitle>
-                        </CardHeader>
-                        <CardContent className="text-center text-sm text-muted-foreground">
-                            Use our drag-and-drop editor to create your store layout
-                        </CardContent>
-                    </Card>
-
-                    <Card className="w-64 hover:border-primary cursor-pointer transition-colors relative overflow-hidden">
-                        <input
-                            type="file"
-                            accept="image/*"
-                            className="absolute inset-0 opacity-0 cursor-pointer z-10"
-                            onChange={handleImageUpload}
-                            disabled={uploading}
-                        />
-                        <CardHeader>
-                            <CardTitle className="flex flex-col items-center gap-4">
-                                <Upload className="h-12 w-12 text-primary" />
-                                Upload Image
-                            </CardTitle>
-                        </CardHeader>
-                        <CardContent className="text-center text-sm text-muted-foreground">
-                            Upload an existing floor plan image to trace over
-                        </CardContent>
-                    </Card>
-                </div>
-            </div>
-        );
-    }
-
     return (
         <div className="h-[calc(100vh-12rem)] flex flex-col border rounded-lg overflow-hidden bg-background">
             {/* Hidden file input for uploading images from sidebar */}
@@ -3235,14 +4332,6 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             {/* Top Bar */}
             <div className="h-14 border-b border-border flex items-center justify-between px-4 bg-card">
                 <div className="flex items-center gap-2">
-                    <Button variant="ghost" size="sm" onClick={() => {
-                        // Changes are auto-saved, so just go back
-                        setMode('choice');
-                    }}>
-                        <ArrowLeft className="h-4 w-4 mr-2" />
-                        Back
-                    </Button>
-                    <div className="h-4 w-px bg-border mx-2" />
                     <h2 className="font-semibold">Map Editor</h2>
                 </div>
 
@@ -3266,8 +4355,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                         <label className="text-xs font-medium">Fill Color</label>
                                         <Input
                                             type="color"
-                                            value={selectedElement.fillColor}
-                                            onChange={(e) => updateElement(selectedElement.id, { fillColor: e.target.value })}
+                                            value={selectedElement.fillColor || '#3b82f6'}
+                                            onChange={(e) => throttledColorUpdate(selectedElement.id, e.target.value)}
                                             className="w-24 h-8 cursor-pointer"
                                         />
                                     </div>
@@ -3276,7 +4365,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                         </div>
 
                         {/* Stroke Color - only for shapes */}
-                        {selectedElement.type !== 'text' && selectedElement.type !== 'smart-pin' && selectedElement.type !== 'static-pin' && (
+                        {selectedElement.type !== 'text' && selectedElement.type !== 'smart-pin' && selectedElement.type !== 'static-pin' && selectedElement.type !== 'device-pin' && (
                             <div className="flex items-center gap-1">
                                 <span className="text-xs text-muted-foreground">Stroke:</span>
                                 <Popover>
@@ -3394,7 +4483,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                         )}
 
                         {/* Animation - for pins */}
-                        {(selectedElement.type === 'smart-pin' || selectedElement.type === 'static-pin') && (
+                        {(selectedElement.type === 'smart-pin' || selectedElement.type === 'static-pin' || selectedElement.type === 'device-pin') && (
                             <div className="flex items-center gap-1">
                                 <span className="text-xs text-muted-foreground">Animation:</span>
                                 <Select
@@ -3413,6 +4502,38 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             </div>
                         )}
 
+                        {/* Motion Scale (Animation Speed) - for pins */}
+                        {(selectedElement.type === 'smart-pin' || selectedElement.type === 'static-pin' || selectedElement.type === 'device-pin') && (
+                            <div className="flex items-center gap-1">
+                                <span className="text-xs text-muted-foreground">Speed:</span>
+                                <Popover>
+                                    <PopoverTrigger asChild>
+                                        <Button variant="outline" size="sm" className="h-8 px-2 text-xs">
+                                            {(selectedElement.motionScale ?? 1).toFixed(1)}x
+                                        </Button>
+                                    </PopoverTrigger>
+                                    <PopoverContent className="w-44 p-3" side="bottom">
+                                        <div className="space-y-2">
+                                            <label className="text-xs font-medium">
+                                                Speed: {(selectedElement.motionScale ?? 1).toFixed(1)}x
+                                            </label>
+                                            <Slider
+                                                value={[selectedElement.motionScale ?? 1]}
+                                                onValueChange={([value]) => updateElement(selectedElement.id, { motionScale: value })}
+                                                min={0.25}
+                                                max={3}
+                                                step={0.25}
+                                            />
+                                            <div className="flex justify-between text-[10px] text-muted-foreground">
+                                                <span>Slow</span>
+                                                <span>Fast</span>
+                                            </div>
+                                        </div>
+                                    </PopoverContent>
+                                </Popover>
+                            </div>
+                        )}
+
                         {/* Separator */}
                         <div className="w-px h-6 bg-border mx-1" />
 
@@ -3428,6 +4549,45 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     </div>
                 )}
 
+                {/* Align/Distribute buttons - visible when 2+ elements selected */}
+                {selectedElementIds.length >= 2 && (
+                    <div className="flex items-center gap-1">
+                        <span className="text-xs text-muted-foreground mr-1">Align:</span>
+                        <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => handleAlign('left')} title="Align left">
+                            <AlignLeft className="h-4 w-4" />
+                        </Button>
+                        <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => handleAlign('center')} title="Align center">
+                            <AlignCenter className="h-4 w-4" />
+                        </Button>
+                        <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => handleAlign('right')} title="Align right">
+                            <AlignRight className="h-4 w-4" />
+                        </Button>
+                        <div className="w-px h-6 bg-border mx-1" />
+                        <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => handleAlign('top')} title="Align top">
+                            <AlignVerticalJustifyStart className="h-4 w-4" />
+                        </Button>
+                        <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => handleAlign('middle')} title="Align middle">
+                            <AlignVerticalJustifyCenter className="h-4 w-4" />
+                        </Button>
+                        <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => handleAlign('bottom')} title="Align bottom">
+                            <AlignVerticalJustifyEnd className="h-4 w-4" />
+                        </Button>
+                        {selectedElementIds.length >= 3 && (
+                            <>
+                                <div className="w-px h-6 bg-border mx-1" />
+                                <span className="text-xs text-muted-foreground mx-1">Distribute:</span>
+                                <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => handleDistribute('horizontal')} title="Distribute horizontally">
+                                    <MoveHorizontal className="h-4 w-4" />
+                                </Button>
+                                <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => handleDistribute('vertical')} title="Distribute vertically">
+                                    <MoveVertical className="h-4 w-4" />
+                                </Button>
+                            </>
+                        )}
+                        <div className="w-px h-6 bg-border mx-2" />
+                    </div>
+                )}
+
                 <div className="flex items-center gap-2">
                     <Button
                         variant="outline"
@@ -3438,12 +4598,19 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                         <Grid className="h-4 w-4 mr-2" />
                         {showGrid ? 'Hide Grid' : 'Show Grid'}
                     </Button>
-                    {mapImageUrl && (
-                        <Button variant="destructive" size="sm" onClick={handleDeleteMap}>
-                            <Trash2 className="h-4 w-4 mr-2" />
-                            Delete Map
-                        </Button>
-                    )}
+                    <Button
+                        variant={snapToGrid ? 'secondary' : 'outline'}
+                        size="sm"
+                        onClick={() => setSnapToGrid(!snapToGrid)}
+                        title="Snap elements to grid intersections (50px)"
+                    >
+                        <Magnet className="h-4 w-4 mr-2" />
+                        {snapToGrid ? 'Snap On' : 'Snap Off'}
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={handleExportPNG} title="Export as PNG">
+                        <Download className="h-4 w-4 mr-2" />
+                        Export
+                    </Button>
                     <Button variant="outline" size="sm" onClick={handleResetZoom}>
                         {Math.round((scale / 0.56) * 100)}%
                     </Button>
@@ -3482,8 +4649,6 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 <Sidebar
                     activeTool={tool}
                     onToolChange={setTool}
-                    onDeleteSelected={() => selectedElementIds.length > 0 && selectedElementIds.forEach(id => handleDeleteElement(id))}
-                    hasSelection={selectedElementIds.length > 0}
                     onUploadClick={() => fileInputRef.current?.click()}
                 />
 
@@ -3536,11 +4701,67 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                         draggable={false}
                         onWheel={handleWheel}
                         onMouseDown={(e) => {
-                            // Right-click to drag canvas
-                            if (e.evt.button === 2) {
-                                setIsRightMouseDown(true);
+                            // Spacebar + left-click to drag canvas (pan mode)
+                            if (e.evt.button === 0 && isSpacePressedRef.current) {
+                                setIsSpaceDragging(true);
                                 e.evt.preventDefault();
+                                return;
+                            }
+                            // Right-click to show context menu
+                            if (e.evt.button === 2) {
+                                e.evt.preventDefault();
+
+                                // Get click position relative to canvas container
+                                const containerRect = canvasContainerRef.current?.getBoundingClientRect();
+                                if (!containerRect) return;
+
+                                const menuX = e.evt.clientX - containerRect.left;
+                                const menuY = e.evt.clientY - containerRect.top;
+
+                                // Determine what was clicked on
+                                const target = e.target;
+                                const stage = target.getStage();
+                                const clickedOnEmpty = target === stage || target.getType() === 'Layer' || target.name() === 'grid-line';
+
+                                // Get clicked element ID if any
+                                let clickedElementId: string | null = null;
+                                let clickedImageId: string | null = null;
+
+                                if (!clickedOnEmpty) {
+                                    // Check if clicked on an element
+                                    const targetId = target.id?.();
+                                    if (targetId && targetId !== stage?.id()) {
+                                        clickedElementId = targetId;
+                                        // Select the element if not already selected
+                                        if (!selectedElementIds.includes(targetId)) {
+                                            setSelectedElementIds([targetId]);
+                                            setSelectedImageIds([]);
+                                            setIsImageSelected(false);
+                                        }
+                                    }
+
+                                    // Check if clicked on an uploaded image
+                                    const targetName = target.name?.();
+                                    if (targetName?.startsWith('uploaded-image-')) {
+                                        clickedImageId = targetName.replace('uploaded-image-', '');
+                                    }
+                                }
+
+                                setContextMenu({
+                                    x: menuX,
+                                    y: menuY,
+                                    visible: true,
+                                    targetElementId: clickedElementId,
+                                    targetImageId: clickedImageId,
+                                    isOnCanvas: clickedOnEmpty,
+                                });
+                                return;
                             } else {
+                                // Close context menu on any left-click
+                                if (contextMenu) {
+                                    setContextMenu(null);
+                                }
+
                                 // Left-click - check if clicking on stage background or empty space
                                 const target = e.target;
                                 const stage = target.getStage();
@@ -3551,15 +4772,30 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                     target.getType() === 'Layer' ||
                                     target.name() === 'grid-line';
 
-                                // Handle eraser tool - start erasing on background image
-                                if (tool === 'eraser' && mapImage) {
+                                // Handle eraser tool - start erasing on any image
+                                if (tool === 'eraser') {
                                     const pos = getCanvasPositionFromKonvaEvent(e);
                                     if (pos) {
-                                        // Store position relative to image (so eraser moves with image)
-                                        const relX = pos.x - mapImagePositionRef.current.x;
-                                        const relY = pos.y - mapImagePositionRef.current.y;
-                                        setIsErasing(true);
-                                        setCurrentEraserStroke([relX, relY]);
+                                        // Find which image the cursor is over
+                                        const imageId = findImageAtPosition(pos.x, pos.y);
+                                        if (imageId) {
+                                            setErasingImageId(imageId);
+                                            setIsErasing(true);
+
+                                            // Store position relative to image
+                                            if (imageId === '__legacy_map_image__') {
+                                                const relX = pos.x - mapImagePositionRef.current.x;
+                                                const relY = pos.y - mapImagePositionRef.current.y;
+                                                setCurrentEraserStroke([relX, relY]);
+                                            } else {
+                                                const img = uploadedImagesRef.current.find(i => i.id === imageId);
+                                                if (img) {
+                                                    const relX = pos.x - img.x;
+                                                    const relY = pos.y - img.y;
+                                                    setCurrentEraserStroke([relX, relY]);
+                                                }
+                                            }
+                                        }
                                     }
                                     return;
                                 }
@@ -3568,7 +4804,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                     // Clear any existing selection when starting a new selection box
                                     setSelectedElementIds([]);
                                     setIsImageSelected(false);
-                                    setSelectedImageId(null);
+                                    setSelectedImageIds([]);
 
                                     // Start selection box - use Layer's getRelativePointerPosition
                                     const pos = getCanvasPositionFromKonvaEvent(e);
@@ -3597,8 +4833,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                 setEraserCursorPos(null);
                             }
 
-                            if (isRightMouseDown) {
-                                // Pan the canvas
+                            if (isRightMouseDown || isSpaceDragging) {
+                                // Pan the canvas (right-click or spacebar+drag)
                                 const stage = e.target.getStage();
                                 if (stage) {
                                     const deltaX = e.evt.movementX;
@@ -3625,7 +4861,12 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                         onMouseUp={(e) => {
                             if (e.evt.button === 2) {
                                 setIsRightMouseDown(false);
-                            } else if (selectionBox?.active) {
+                            }
+                            if (e.evt.button === 0 && isSpaceDragging) {
+                                setIsSpaceDragging(false);
+                                return;
+                            }
+                            if (selectionBox?.active) {
                                 // Finalize selection box - find all elements within bounds
                                 const box = selectionBox;
                                 const minX = Math.min(box.startX, box.endX);
@@ -3684,22 +4925,42 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                     return !(elMaxX < minX || elMinX > maxX || elMaxY < minY || elMinY > maxY);
                                 });
 
+                                // Also find uploaded images that intersect with selection box
+                                const selectedImages = uploadedImages.filter(img => {
+                                    const imgMinX = img.x;
+                                    const imgMaxX = img.x + img.width;
+                                    const imgMinY = img.y;
+                                    const imgMaxY = img.y + img.height;
+                                    // Check intersection
+                                    return !(imgMaxX < minX || imgMinX > maxX || imgMaxY < minY || imgMinY > maxY);
+                                });
+
                                 console.log('Selection box complete:', {
                                     box: { minX, maxX, minY, maxY },
                                     totalElements: elements.length,
-                                    selectedCount: selectedElements.length,
-                                    selectedIds: selectedElements.map(el => el.id)
+                                    selectedElementCount: selectedElements.length,
+                                    selectedElementIds: selectedElements.map(el => el.id),
+                                    selectedImageCount: selectedImages.length,
+                                    selectedImageIds: selectedImages.map(img => img.id)
                                 });
 
-                                // Select all elements found
-                                if (selectedElements.length > 0) {
-                                    const newSelectedIds = selectedElements.map(el => el.id);
-                                    selectedElementIdsRef.current = newSelectedIds; // Update ref immediately
-                                    setSelectedElementIds(newSelectedIds);
-                                    toast.success(`Selected ${selectedElements.length} element${selectedElements.length > 1 ? 's' : ''}`);
+                                // Select all elements and images found
+                                if (selectedElements.length > 0 || selectedImages.length > 0) {
+                                    // Set selected elements
+                                    const newSelectedElementIds = selectedElements.map(el => el.id);
+                                    selectedElementIdsRef.current = newSelectedElementIds;
+                                    setSelectedElementIds(newSelectedElementIds);
+
+                                    // Set selected images
+                                    const newSelectedImageIds = selectedImages.map(img => img.id);
+                                    setSelectedImageIds(newSelectedImageIds);
+
+                                    const totalSelected = selectedElements.length + selectedImages.length;
+                                    toast.success(`Selected ${totalSelected} item${totalSelected > 1 ? 's' : ''}`);
                                 } else {
-                                    selectedElementIdsRef.current = []; // Update ref immediately
+                                    selectedElementIdsRef.current = [];
                                     setSelectedElementIds([]);
+                                    setSelectedImageIds([]);
                                 }
 
                                 setSelectionBox(null);
@@ -3716,7 +4977,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             width: CANVAS_WIDTH,
                             height: CANVAS_HEIGHT,
                             background: '#ffffff',
-                            cursor: isRightMouseDown ? 'grabbing' : tool === 'eraser' ? 'none' : 'default'
+                            cursor: (isRightMouseDown || isSpaceDragging) ? 'grabbing' : tool === 'eraser' ? 'none' : 'default'
                         }}
                     >
                         <Layer>
@@ -3757,7 +5018,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                             e.cancelBubble = true;
                                             setIsImageSelected(true);
                                             setSelectedElementIds([]);
-                                            setSelectedImageId(null);
+                                            setSelectedImageIds([]);
                                         }
                                     }}
                                     onTap={(e) => {
@@ -3765,7 +5026,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                             e.cancelBubble = true;
                                             setIsImageSelected(true);
                                             setSelectedElementIds([]);
-                                            setSelectedImageId(null);
+                                            setSelectedImageIds([]);
                                         }
                                     }}
                                     onDragMove={(e) => {
@@ -3945,32 +5206,63 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                 </Group>
                             )}
 
-                            {/* Additional Uploaded Images */}
+                            {/* Additional Uploaded Images - Wrapped in cached Groups for eraser support */}
                             {uploadedImages.map((uploadedImg) => (
-                                <KonvaImage
+                                <Group
                                     key={uploadedImg.id}
-                                    id={uploadedImg.id}
-                                    image={uploadedImg.image}
+                                    id={`image-group-${uploadedImg.id}`}
                                     x={uploadedImg.x}
                                     y={uploadedImg.y}
                                     width={uploadedImg.width}
                                     height={uploadedImg.height}
                                     draggable={tool === 'select'}
+                                    ref={(node) => {
+                                        // Cache the group when it mounts (required for eraser composite operation)
+                                        if (node && uploadedImg.image) {
+                                            // Use setTimeout to ensure the image is rendered first
+                                            setTimeout(() => {
+                                                node.cache();
+                                            }, 0);
+                                        }
+                                    }}
                                     onClick={(e) => {
                                         if (tool === 'select') {
                                             e.cancelBubble = true;
-                                            setSelectedImageId(uploadedImg.id);
-                                            setSelectedElementIds([]);
+                                            // Support multi-select with Shift key
+                                            if (e.evt.shiftKey) {
+                                                setSelectedImageIds(prev =>
+                                                    prev.includes(uploadedImg.id)
+                                                        ? prev.filter(id => id !== uploadedImg.id)
+                                                        : [...prev, uploadedImg.id]
+                                                );
+                                            } else {
+                                                setSelectedImageIds([uploadedImg.id]);
+                                                setSelectedElementIds([]);
+                                            }
                                             setIsImageSelected(false);
                                         }
                                     }}
                                     onTap={(e) => {
                                         if (tool === 'select') {
                                             e.cancelBubble = true;
-                                            setSelectedImageId(uploadedImg.id);
+                                            setSelectedImageIds([uploadedImg.id]);
                                             setSelectedElementIds([]);
                                             setIsImageSelected(false);
                                         }
+                                    }}
+                                    onDragStart={() => {
+                                        // Capture current image state before drag for undo
+                                        imageDragStartStateRef.current = JSON.parse(JSON.stringify(
+                                            uploadedImagesRef.current.map(img => ({
+                                                id: img.id,
+                                                url: img.url,
+                                                x: img.x,
+                                                y: img.y,
+                                                width: img.width,
+                                                height: img.height,
+                                                eraserStrokes: img.eraserStrokes,
+                                            }))
+                                        ));
                                     }}
                                     onDragMove={(e) => {
                                         // Smart guides for uploaded images
@@ -4057,13 +5349,46 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                         setSmartGuides(guides);
                                     }}
                                     onDragEnd={(e) => {
-                                        setUploadedImages(prev => prev.map(img =>
+                                        // Calculate new state
+                                        const newImages = uploadedImagesRef.current.map(img =>
                                             img.id === uploadedImg.id
                                                 ? { ...img, x: e.target.x(), y: e.target.y() }
                                                 : img
-                                        ));
+                                        );
+
+                                        // Save to history before updating state
+                                        if (imageDragStartStateRef.current) {
+                                            const previousImages = imageDragStartStateRef.current;
+                                            const afterImages = newImages.map(img => ({
+                                                id: img.id,
+                                                url: img.url,
+                                                x: img.x,
+                                                y: img.y,
+                                                width: img.width,
+                                                height: img.height,
+                                                eraserStrokes: img.eraserStrokes,
+                                            }));
+                                            saveImagesToHistory(previousImages as any, afterImages as any);
+                                            imageDragStartStateRef.current = null;
+                                        }
+
+                                        setUploadedImages(newImages);
                                         setHasUnsavedChanges(true);
                                         setSmartGuides({ vertical: [], horizontal: [] });
+                                    }}
+                                    onTransformStart={() => {
+                                        // Capture current image state before transform for undo
+                                        imageDragStartStateRef.current = JSON.parse(JSON.stringify(
+                                            uploadedImagesRef.current.map(img => ({
+                                                id: img.id,
+                                                url: img.url,
+                                                x: img.x,
+                                                y: img.y,
+                                                width: img.width,
+                                                height: img.height,
+                                                eraserStrokes: img.eraserStrokes,
+                                            }))
+                                        ));
                                     }}
                                     onTransformEnd={(e) => {
                                         const node = e.target;
@@ -4072,7 +5397,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                         node.scaleX(1);
                                         node.scaleY(1);
 
-                                        setUploadedImages(prev => prev.map(img =>
+                                        // Calculate new state
+                                        const newImages = uploadedImagesRef.current.map(img =>
                                             img.id === uploadedImg.id
                                                 ? {
                                                     ...img,
@@ -4082,10 +5408,70 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                                     height: Math.max(20, img.height * scaleY),
                                                 }
                                                 : img
-                                        ));
+                                        );
+
+                                        // Save to history before updating state
+                                        if (imageDragStartStateRef.current) {
+                                            const previousImages = imageDragStartStateRef.current;
+                                            const afterImages = newImages.map(img => ({
+                                                id: img.id,
+                                                url: img.url,
+                                                x: img.x,
+                                                y: img.y,
+                                                width: img.width,
+                                                height: img.height,
+                                                eraserStrokes: img.eraserStrokes,
+                                            }));
+                                            saveImagesToHistory(previousImages as any, afterImages as any);
+                                            imageDragStartStateRef.current = null;
+                                        }
+
+                                        setUploadedImages(newImages);
                                         setHasUnsavedChanges(true);
                                     }}
-                                />
+                                >
+                                    {/* The actual image */}
+                                    <KonvaImage
+                                        id={uploadedImg.id}
+                                        image={uploadedImg.image}
+                                        width={uploadedImg.width}
+                                        height={uploadedImg.height}
+                                        opacity={0.9}
+                                    />
+
+                                    {/* Eraser strokes - use destination-out to cut from the image */}
+                                    {uploadedImg.eraserStrokes.map((stroke, i) => {
+                                        const strokeSize = stroke[stroke.length - 1];
+                                        const points = stroke.slice(0, -1);
+                                        return (
+                                            <Line
+                                                key={`eraser-stroke-${uploadedImg.id}-${i}`}
+                                                points={points}
+                                                stroke="#000000"
+                                                strokeWidth={strokeSize}
+                                                tension={0.5}
+                                                lineCap="round"
+                                                lineJoin="round"
+                                                globalCompositeOperation="destination-out"
+                                                listening={false}
+                                            />
+                                        );
+                                    })}
+
+                                    {/* Current eraser stroke preview for this image */}
+                                    {isErasing && erasingImageId === uploadedImg.id && currentEraserStroke.length > 0 && (
+                                        <Line
+                                            points={currentEraserStroke}
+                                            stroke="#000000"
+                                            strokeWidth={eraserSize}
+                                            tension={0.5}
+                                            lineCap="round"
+                                            lineJoin="round"
+                                            globalCompositeOperation="destination-out"
+                                            listening={false}
+                                        />
+                                    )}
+                                </Group>
                             ))}
 
                             {/* Grid lines - rendered AFTER eraser strokes so they're visible */}
@@ -4359,6 +5745,104 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                         </Layer>
                     </Stage>
 
+                    {/* Right-click Context Menu */}
+                    {contextMenu?.visible && (
+                        <div
+                            className="absolute bg-popover border border-border rounded-lg shadow-lg py-1 z-50 min-w-[160px]"
+                            style={{ left: contextMenu.x, top: contextMenu.y }}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            {contextMenu.isOnCanvas ? (
+                                // Empty canvas - only show Paste if we have copied elements
+                                copiedElements.length > 0 && (
+                                    <button
+                                        onClick={() => { handlePaste(); setContextMenu(null); }}
+                                        className="w-full px-3 py-1.5 text-sm text-left hover:bg-accent flex items-center gap-2"
+                                    >
+                                        <span className="text-muted-foreground text-xs w-12">Ctrl+V</span>
+                                        Paste
+                                    </button>
+                                )
+                            ) : (
+                                // On element - show full menu
+                                <>
+                                    <button
+                                        onClick={() => { handleCut(); setContextMenu(null); }}
+                                        className="w-full px-3 py-1.5 text-sm text-left hover:bg-accent flex items-center gap-2"
+                                    >
+                                        <span className="text-muted-foreground text-xs w-12">Ctrl+X</span>
+                                        Cut
+                                    </button>
+                                    <button
+                                        onClick={() => { handleCopy(); setContextMenu(null); }}
+                                        className="w-full px-3 py-1.5 text-sm text-left hover:bg-accent flex items-center gap-2"
+                                    >
+                                        <span className="text-muted-foreground text-xs w-12">Ctrl+C</span>
+                                        Copy
+                                    </button>
+                                    <button
+                                        onClick={() => { handlePaste(); setContextMenu(null); }}
+                                        className="w-full px-3 py-1.5 text-sm text-left hover:bg-accent flex items-center gap-2"
+                                        disabled={copiedElements.length === 0}
+                                    >
+                                        <span className="text-muted-foreground text-xs w-12">Ctrl+V</span>
+                                        Paste
+                                    </button>
+                                    <button
+                                        onClick={() => { handleDuplicate(); setContextMenu(null); }}
+                                        className="w-full px-3 py-1.5 text-sm text-left hover:bg-accent flex items-center gap-2"
+                                    >
+                                        <span className="text-muted-foreground text-xs w-12">Ctrl+D</span>
+                                        Duplicate
+                                    </button>
+                                    <div className="border-t border-border my-1" />
+                                    <button
+                                        onClick={() => {
+                                            if (contextMenu.targetElementId) {
+                                                handleDeleteElement(contextMenu.targetElementId);
+                                            }
+                                            setContextMenu(null);
+                                        }}
+                                        className="w-full px-3 py-1.5 text-sm text-left hover:bg-accent flex items-center gap-2 text-destructive"
+                                    >
+                                        <span className="text-muted-foreground text-xs w-12">Del</span>
+                                        Delete
+                                    </button>
+                                    <div className="border-t border-border my-1" />
+                                    <button
+                                        onClick={handleBringForward}
+                                        className="w-full px-3 py-1.5 text-sm text-left hover:bg-accent"
+                                        disabled={selectedElementIds.length !== 1}
+                                    >
+                                        Bring Forward
+                                    </button>
+                                    <button
+                                        onClick={handleSendBackward}
+                                        className="w-full px-3 py-1.5 text-sm text-left hover:bg-accent"
+                                        disabled={selectedElementIds.length !== 1}
+                                    >
+                                        Send Backward
+                                    </button>
+                                    <button
+                                        onClick={handleBringToFront}
+                                        className="w-full px-3 py-1.5 text-sm text-left hover:bg-accent"
+                                        disabled={selectedElementIds.length !== 1}
+                                    >
+                                        Bring to Front
+                                    </button>
+                                    <button
+                                        onClick={handleSendToBack}
+                                        className="w-full px-3 py-1.5 text-sm text-left hover:bg-accent"
+                                        disabled={selectedElementIds.length !== 1}
+                                    >
+                                        Send to Back
+                                    </button>
+                                </>
+                            )}
+                        </div>
+                    )}
+
                     {/* Inline Naming Input */}
                     {namingElementId && (
                         <div
@@ -4424,36 +5908,77 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     )}
 
                     {/* Label Edit Input (for element labels) */}
-                    {editingLabelId && (
-                        <div
-                            className="absolute z-50 pointer-events-auto"
-                            style={{
-                                left: editingLabelPosition.x,
-                                top: editingLabelPosition.y,
-                                transform: 'translate(-50%, -50%)',
-                            }}
-                            onMouseDown={(e) => e.stopPropagation()}
-                        >
-                            <input
-                                ref={labelEditInputRef}
-                                value={editingLabelValue}
-                                onChange={(e) => setEditingLabelValue(e.target.value)}
-                                onKeyDown={(e) => {
-                                    if (e.key === 'Enter') {
-                                        e.preventDefault();
-                                        finishLabelEdit(true);
-                                    }
-                                    if (e.key === 'Escape') {
-                                        e.preventDefault();
-                                        finishLabelEdit(false);
-                                    }
+                    {editingLabelId && (() => {
+                        const editingElement = elements.find(el => el.id === editingLabelId);
+                        const isStaticPin = editingElement?.type === 'static-pin';
+                        const isDevicePin = editingElement?.type === 'device-pin';
+                        const isTextElement = editingElement?.type === 'text';
+
+                        // Determine styling based on element type:
+                        // - static-pin/device-pin: use pin's label styling
+                        // - text: use text element's styling
+                        // - other shapes: use label settings
+                        let textColor: string;
+                        let fontSize: number;
+                        let fontWeight: string;
+                        let fontFamily: string;
+
+                        if (isStaticPin || isDevicePin) {
+                            textColor = editingElement?.pinLabelColor || '#ffffff';
+                            fontSize = (editingElement?.pinLabelFontSize || (isDevicePin ? 14 : 16)) * scale;
+                            fontWeight = editingElement?.pinLabelFontWeight || 'normal';
+                            fontFamily = editingElement?.pinLabelFontFamily || 'Inter, system-ui, -apple-system, sans-serif';
+                        } else if (isTextElement) {
+                            textColor = editingElement?.fillColor || '#3b82f6';
+                            fontSize = (editingElement?.fontSize || 24) * scale;
+                            fontWeight = editingElement?.fontWeight || 'normal';
+                            fontFamily = editingElement?.fontFamily || 'Arial';
+                        } else {
+                            textColor = editingElement?.labelColor || '#000000';
+                            fontSize = (editingElement?.labelFontSize || 28) * scale;
+                            fontWeight = editingElement?.labelFontWeight || 'normal';
+                            fontFamily = 'Arial, sans-serif';
+                        }
+
+                        return (
+                            <div
+                                className="absolute z-50 pointer-events-auto"
+                                style={{
+                                    left: editingLabelPosition.x,
+                                    top: editingLabelPosition.y,
+                                    transform: 'translate(-50%, -50%)',
                                 }}
-                                className="bg-transparent border-none text-center text-xs outline-none focus:outline-none focus:ring-0 min-w-[60px] text-black"
-                                style={{ caretColor: 'black' }}
-                                placeholder=""
-                            />
-                        </div>
-                    )}
+                                onMouseDown={(e) => e.stopPropagation()}
+                            >
+                                <input
+                                    ref={labelEditInputRef}
+                                    value={editingLabelValue}
+                                    onChange={(e) => setEditingLabelValue(e.target.value)}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                            e.preventDefault();
+                                            finishLabelEdit(true);
+                                        }
+                                        if (e.key === 'Escape') {
+                                            e.preventDefault();
+                                            finishLabelEdit(false);
+                                        }
+                                    }}
+                                    className="border-none text-center outline-none focus:outline-none focus:ring-0 min-w-[60px]"
+                                    style={{
+                                        color: textColor,
+                                        caretColor: textColor,
+                                        fontSize: `${fontSize}px`,
+                                        fontWeight: fontWeight,
+                                        backgroundColor: 'transparent',
+                                        lineHeight: 1.2,
+                                        fontFamily: fontFamily,
+                                    }}
+                                    placeholder=""
+                                />
+                            </div>
+                        );
+                    })()}
                 </div>
 
                 {/* Right Sidebar - Properties, Layers & Links */}
@@ -4489,11 +6014,18 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                 eraserSize={eraserSize}
                                 onEraserSizeChange={setEraserSize}
                                 onClearEraserStrokes={() => {
+                                    // Clear legacy mapImage eraser strokes
                                     setEraserStrokes([]);
-                                    setEraserHistory([]);
-                                    setEraserHistoryStep(-1);
+                                    // Clear all uploaded images' eraser strokes
+                                    setUploadedImages(prev => prev.map(img => ({
+                                        ...img,
+                                        eraserStrokes: []
+                                    })));
+                                    // Note: Clear is not undoable for simplicity
                                 }}
-                                hasEraserStrokes={eraserStrokes.length > 0}
+                                hasEraserStrokes={eraserStrokes.length > 0 || uploadedImages.some(img => img.eraserStrokes.length > 0)}
+                                onFlipHorizontal={handleFlipHorizontal}
+                                onFlipVertical={handleFlipVertical}
                             />
                         </TabsContent>
 
@@ -4529,6 +6061,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 storeId={storeId}
                 elements={elements}
                 mapImageUrl={mapImageUrl}
+                uploadedImages={uploadedImages}
             />
         </div>
     );

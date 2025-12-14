@@ -6,6 +6,18 @@ import { MapPin, Loader2, AlertCircle, ZoomIn, ZoomOut, Maximize } from 'lucide-
 import { Button } from '@/components/ui/button';
 import { Product } from '@/data/products';
 
+// Uploaded image interface (matches MapEditor)
+interface UploadedImage {
+  id: string;
+  url: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  image: HTMLImageElement | null;
+  eraserStrokes: number[][];
+}
+
 interface StoreMapProps {
   selectedProduct: Product | null;
   storeId?: number;
@@ -43,9 +55,21 @@ interface MapElement {
   pinLabelColor?: string;
   pinLabelFontWeight?: string;
   showNameOn?: string;
+  // New properties for advanced features
+  scaleX?: number;
+  scaleY?: number;
+  strokeStyle?: string;
+  gradient?: any;
+  textShadow?: any;
+  textOutline?: any;
+  textGlow?: any;
+  letterSpacing?: number;
+  lineHeight?: number;
+  textDecoration?: string;
 }
 
-import { calculateFitToViewScale } from './map-editor/types';
+import { calculateFitToViewScale, getStrokeDash } from './map-editor/types';
+import { getGradientProps } from './map-editor/GradientEditor';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 const CANVAS_WIDTH = 1200;
@@ -80,6 +104,7 @@ const BASE_SCALE = 0.58; // This represents "100%" zoom - fits the capture area 
 const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
   const [mapImageUrl, setMapImageUrl] = useState<string | null>(null);
   const [elements, setElements] = useState<MapElement[]>([]);
+  const [uploadedImages, setUploadedImages] = useState<UploadedImage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeSmartPins, setActiveSmartPins] = useState<string[]>([]);
@@ -93,6 +118,106 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
 
   // Load map image
   const [loadedImage] = useImage(mapImageUrl ? `${API_URL}${mapImageUrl}` : '');
+
+  // Load uploaded images from database (published), fall back to localStorage
+  useEffect(() => {
+    const loadImages = async () => {
+      let imagesLoaded = false;
+
+      // First try to load from database (published images)
+      try {
+        const response = await fetch(`${API_URL}/api/admin/stores/${storeId}/map/uploaded-images?published=true`);
+        if (response.ok) {
+          const data = await response.json();
+          const dbImages = data.uploadedImages;
+
+          if (Array.isArray(dbImages) && dbImages.length > 0) {
+            // Load images from URLs
+            const loadedImages = dbImages.map((imgData: any) => ({
+              id: imgData.id,
+              url: imgData.url,
+              x: imgData.x,
+              y: imgData.y,
+              width: imgData.width,
+              height: imgData.height,
+              image: null as HTMLImageElement | null,
+              eraserStrokes: imgData.eraserStrokes || [],
+            }));
+
+            // Load actual image elements
+            loadedImages.forEach((imgData: UploadedImage, index: number) => {
+              const img = new window.Image();
+              img.crossOrigin = 'anonymous';
+              img.onload = () => {
+                setUploadedImages(prev => {
+                  const updated = [...prev];
+                  if (updated[index]) {
+                    updated[index] = { ...updated[index], image: img };
+                  }
+                  return updated;
+                });
+              };
+              // Handle both relative and absolute URLs
+              img.src = imgData.url.startsWith('/') ? `${API_URL}${imgData.url}` : imgData.url;
+            });
+
+            setUploadedImages(loadedImages);
+            imagesLoaded = true;
+          }
+        }
+      } catch (dbErr) {
+        console.warn('Failed to load images from database, falling back to localStorage:', dbErr);
+      }
+
+      // Fall back to localStorage if database didn't have images
+      if (!imagesLoaded) {
+        const savedImagesKey = `map-editor-images-${storeId}`;
+        const savedData = localStorage.getItem(savedImagesKey);
+
+        if (savedData) {
+          try {
+            const parsed = JSON.parse(savedData);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              // Load images from URLs
+              const loadedImages = parsed.map((imgData: any) => ({
+                id: imgData.id,
+                url: imgData.url,
+                x: imgData.x,
+                y: imgData.y,
+                width: imgData.width,
+                height: imgData.height,
+                image: null as HTMLImageElement | null,
+                eraserStrokes: imgData.eraserStrokes || [],
+              }));
+
+              // Load actual image elements
+              loadedImages.forEach((imgData: UploadedImage, index: number) => {
+                const img = new window.Image();
+                img.crossOrigin = 'anonymous';
+                img.onload = () => {
+                  setUploadedImages(prev => {
+                    const updated = [...prev];
+                    if (updated[index]) {
+                      updated[index] = { ...updated[index], image: img };
+                    }
+                    return updated;
+                  });
+                };
+                // Handle both relative and absolute URLs
+                img.src = imgData.url.startsWith('/') ? `${API_URL}${imgData.url}` : imgData.url;
+              });
+
+              setUploadedImages(loadedImages);
+            }
+          } catch (err) {
+            console.error('Error loading uploaded images from localStorage:', err);
+          }
+        }
+      }
+    };
+
+    loadImages();
+  }, [storeId]);
 
   // Fetch map data
   useEffect(() => {
@@ -143,13 +268,28 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
               points: metadata.points,
               freehandPoints: metadata.freehandPoints,
               sides: metadata.sides ?? 6,
-              animationStyle: metadata.animationStyle ?? 1,
+              animationStyle: metadata.animationStyle ?? 0,
               motionScale: metadata.motionScale ?? 1,
               pinLabel: metadata.pinLabel ?? '',
-              pinLabelFontSize: metadata.pinLabelFontSize ?? 12,
+              pinLabelFontSize: metadata.pinLabelFontSize ?? 16,
               pinLabelColor: metadata.pinLabelColor ?? '#ffffff',
               pinLabelFontWeight: metadata.pinLabelFontWeight ?? 'normal',
-              showNameOn: metadata.showNameOn ?? 'layers',
+              showNameOn: metadata.showNameOn ?? 'both',
+              // Transform properties
+              scaleX: metadata.scaleX ?? 1,
+              scaleY: metadata.scaleY ?? 1,
+              // Stroke style
+              strokeStyle: metadata.strokeStyle ?? 'solid',
+              // Gradient
+              gradient: metadata.gradient,
+              // Text effects
+              textShadow: metadata.textShadow,
+              textOutline: metadata.textOutline,
+              textGlow: metadata.textGlow,
+              // Additional text properties
+              letterSpacing: metadata.letterSpacing ?? 0,
+              lineHeight: metadata.lineHeight ?? 1,
+              textDecoration: metadata.textDecoration ?? 'none',
             };
           }));
         }
@@ -414,6 +554,85 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
     };
   }, [activeSmartPins, elements, getAnimationConfig]);
 
+  // Run animations for static pins (always animate when they have an animation style)
+  useEffect(() => {
+    if (!stageRef.current) return;
+
+    const staticPinsWithAnimation = elements.filter(
+      el => (el.type === 'static-pin' || el.type === 'device-pin') && el.visible && el.animationStyle && el.animationStyle > 0
+    );
+
+    if (staticPinsWithAnimation.length === 0) return;
+
+    const stage = stageRef.current;
+    const cleanupFunctions: (() => void)[] = [];
+
+    staticPinsWithAnimation.forEach(element => {
+      const nodeId = element.type === 'device-pin' ? `#device-pin-${element.id}` : `#static-pin-${element.id}`;
+      const node = stage.findOne(nodeId);
+      if (!node) return;
+
+      const config = getAnimationConfig(element.animationStyle!, node.y(), element.motionScale || 1);
+      if (!config) return;
+
+      const originalProps = {
+        scaleX: node.scaleX(),
+        scaleY: node.scaleY(),
+        opacity: node.opacity(),
+        y: node.y(),
+      };
+
+      let isRunning = true;
+
+      const runAnimation = () => {
+        if (!isRunning) return;
+
+        const forwardTween = new Konva.Tween({
+          node,
+          duration: config.duration,
+          easing: config.easing,
+          ...config.properties,
+          onFinish: () => {
+            if (!isRunning) return;
+            const reverseTween = new Konva.Tween({
+              node,
+              duration: config.duration,
+              easing: config.easing,
+              scaleX: originalProps.scaleX,
+              scaleY: originalProps.scaleY,
+              opacity: originalProps.opacity,
+              y: originalProps.y,
+              onFinish: () => {
+                if (isRunning) {
+                  setTimeout(runAnimation, 200);
+                }
+              },
+            });
+            reverseTween.play();
+          },
+        });
+        forwardTween.play();
+      };
+
+      // Start animation after a short delay to ensure node is rendered
+      setTimeout(runAnimation, 100);
+
+      cleanupFunctions.push(() => {
+        isRunning = false;
+        if (node) {
+          node.scaleX(originalProps.scaleX);
+          node.scaleY(originalProps.scaleY);
+          node.opacity(originalProps.opacity);
+          node.y(originalProps.y);
+        }
+      });
+    });
+
+    return () => {
+      cleanupFunctions.forEach(cleanup => cleanup());
+    };
+  }, [elements, getAnimationConfig]);
+
   // Get trapezoid points
   const getTrapezoidPoints = (width: number, height: number): number[] => {
     const topOffset = width * 0.2;
@@ -447,6 +666,8 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
       x: element.x,
       y: element.y,
       rotation: element.rotation,
+      scaleX: element.scaleX || 1,
+      scaleY: element.scaleY || 1,
     };
 
     switch (element.type) {
@@ -457,11 +678,12 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
             {...commonProps}
             width={element.width}
             height={element.height}
-            fill={element.fillColor}
+            {...getGradientProps(element as any)}
             opacity={element.fillOpacity}
             stroke={element.strokeColor}
             strokeWidth={element.strokeWidth}
             cornerRadius={element.cornerRadius}
+            dash={getStrokeDash(element.strokeStyle)}
           />
         );
       case 'circle':
@@ -470,10 +692,11 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
             key={element.id}
             {...commonProps}
             radius={element.width / 2}
-            fill={element.fillColor}
+            {...getGradientProps(element as any)}
             opacity={element.fillOpacity}
             stroke={element.strokeColor}
             strokeWidth={element.strokeWidth}
+            dash={getStrokeDash(element.strokeStyle)}
           />
         );
       case 'triangle':
@@ -487,6 +710,7 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
             opacity={element.fillOpacity}
             stroke={element.strokeColor}
             strokeWidth={element.strokeWidth}
+            dash={getStrokeDash(element.strokeStyle)}
           />
         );
       case 'trapezoid':
@@ -500,6 +724,7 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
             opacity={element.fillOpacity}
             stroke={element.strokeColor}
             strokeWidth={element.strokeWidth}
+            dash={getStrokeDash(element.strokeStyle)}
           />
         );
       case 'parallelogram':
@@ -513,6 +738,7 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
             opacity={element.fillOpacity}
             stroke={element.strokeColor}
             strokeWidth={element.strokeWidth}
+            dash={getStrokeDash(element.strokeStyle)}
           />
         );
       case 'polygon':
@@ -526,6 +752,7 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
             opacity={element.fillOpacity}
             stroke={element.strokeColor}
             strokeWidth={element.strokeWidth}
+            dash={getStrokeDash(element.strokeStyle)}
           />
         );
       case 'line':
@@ -535,6 +762,7 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
             points={element.points || [0, 0, 100, 0]}
             stroke={element.strokeColor}
             strokeWidth={element.strokeWidth}
+            dash={getStrokeDash(element.strokeStyle)}
           />
         );
       case 'arrow':
@@ -544,9 +772,21 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
             points={element.points || [0, 0, 100, 0]}
             stroke={element.strokeColor}
             strokeWidth={element.strokeWidth}
+            dash={getStrokeDash(element.strokeStyle)}
           />
         );
       case 'text':
+        // Calculate text effects
+        const storeTextShadowEnabled = element.textShadow?.enabled || element.textGlow?.enabled;
+        const storeTextShadowColor = element.textGlow?.enabled
+          ? element.textGlow.color
+          : (element.textShadow?.color || '#000000');
+        const storeTextShadowBlur = element.textGlow?.enabled
+          ? element.textGlow.blur
+          : (element.textShadow?.blur || 0);
+        const storeTextShadowOffsetX = element.textGlow?.enabled ? 0 : (element.textShadow?.offsetX || 0);
+        const storeTextShadowOffsetY = element.textGlow?.enabled ? 0 : (element.textShadow?.offsetY || 0);
+
         return (
           <KonvaText
             key={element.id}
@@ -557,6 +797,16 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
             fill={element.fillColor}
             align={element.textAlign}
             width={element.width}
+            letterSpacing={element.letterSpacing || 0}
+            lineHeight={element.lineHeight || 1}
+            textDecoration={element.textDecoration || 'none'}
+            shadowEnabled={storeTextShadowEnabled}
+            shadowColor={storeTextShadowColor}
+            shadowBlur={storeTextShadowBlur}
+            shadowOffsetX={storeTextShadowOffsetX}
+            shadowOffsetY={storeTextShadowOffsetY}
+            stroke={element.textOutline?.enabled ? element.textOutline.color : undefined}
+            strokeWidth={element.textOutline?.enabled ? element.textOutline.width : 0}
           />
         );
       case 'freehand':
@@ -569,6 +819,7 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
             tension={0.5}
             lineCap="round"
             lineJoin="round"
+            dash={getStrokeDash(element.strokeStyle)}
           />
         );
       // Static pins - cornered square badge design
@@ -577,12 +828,13 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
         const staticPinHeight = (element.height || 55) * 0.7;
         const staticPointerHeight = (element.height || 55) * 0.3;
         const staticCornerRadius = 6;
-        const staticLabelFontSize = element.pinLabelFontSize || 12;
+        const staticLabelFontSize = element.pinLabelFontSize || 16;
         const staticLabelColor = element.pinLabelColor || '#ffffff';
-        const staticLabelFontWeight = element.pinLabelFontWeight || 'bold';
+        const staticLabelFontWeight = element.pinLabelFontWeight || 'normal';
+        const staticLabelFontFamily = element.pinLabelFontFamily || 'Inter, system-ui, -apple-system, sans-serif';
 
         return (
-          <Group key={element.id} x={element.x} y={element.y}>
+          <Group key={element.id} id={`static-pin-${element.id}`} x={element.x} y={element.y}>
             {/* Rectangle body with rounded corners */}
             <Rect
               x={-staticPinWidth / 2}
@@ -624,13 +876,89 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
               <KonvaText
                 text={element.pinLabel}
                 x={-staticPinWidth / 2}
-                y={-staticPinHeight - staticPointerHeight + (staticPinHeight - staticLabelFontSize) / 2}
+                y={-staticPinHeight - staticPointerHeight}
                 width={staticPinWidth}
+                height={staticPinHeight}
                 fontSize={staticLabelFontSize}
-                fontFamily="Arial, sans-serif"
+                fontFamily={staticLabelFontFamily}
                 fontStyle={staticLabelFontWeight}
                 fill={staticLabelColor}
                 align="center"
+                verticalAlign="middle"
+              />
+            )}
+          </Group>
+        );
+      case 'device-pin':
+        // Kiosk/screen design with monitor and stand (no pointer)
+        const devicePinWidth = element.width || 50;
+        const devicePinHeight = element.height || 60;
+        const screenHeight = devicePinHeight * 0.70;
+        const standHeight = devicePinHeight * 0.30;
+        const screenCornerRadius = 4;
+        const deviceLabelFontSize = element.pinLabelFontSize || 14;
+        const deviceLabelColor = element.pinLabelColor || '#ffffff';
+        const deviceLabelFontWeight = element.pinLabelFontWeight || 'normal';
+        const deviceLabelFontFamily = element.pinLabelFontFamily || 'Inter, system-ui, -apple-system, sans-serif';
+        // Use a single color for the entire device pin (no separate stroke)
+        const deviceFillColor = element.fillColor || '#6366f1';
+        const deviceFillOpacity = element.fillOpacity ?? 1;
+
+        return (
+          <Group key={element.id} id={`device-pin-${element.id}`} x={element.x} y={element.y}>
+            {/* Screen/monitor body - no stroke, single color */}
+            <Rect
+              x={-devicePinWidth / 2}
+              y={-screenHeight - standHeight}
+              width={devicePinWidth}
+              height={screenHeight}
+              fill={deviceFillColor}
+              opacity={deviceFillOpacity}
+              cornerRadius={screenCornerRadius}
+            />
+            {/* Screen inner area (darker overlay for depth) */}
+            <Rect
+              x={-devicePinWidth / 2 + 4}
+              y={-screenHeight - standHeight + 4}
+              width={devicePinWidth - 8}
+              height={screenHeight - 8}
+              fill="#000000"
+              opacity={0.25}
+              cornerRadius={2}
+            />
+            {/* Stand neck - same color as body */}
+            <Rect
+              x={-devicePinWidth * 0.1}
+              y={-standHeight}
+              width={devicePinWidth * 0.2}
+              height={standHeight * 0.6}
+              fill={deviceFillColor}
+              opacity={deviceFillOpacity}
+            />
+            {/* Stand base - same color as body */}
+            <Rect
+              x={-devicePinWidth * 0.35}
+              y={-standHeight * 0.4}
+              width={devicePinWidth * 0.7}
+              height={standHeight * 0.4}
+              fill={deviceFillColor}
+              opacity={deviceFillOpacity}
+              cornerRadius={2}
+            />
+            {/* Pin label inside screen */}
+            {element.pinLabel && (
+              <KonvaText
+                text={element.pinLabel}
+                x={-devicePinWidth / 2 + 4}
+                y={-screenHeight - standHeight + 4}
+                width={devicePinWidth - 8}
+                height={screenHeight - 8}
+                fontSize={deviceLabelFontSize}
+                fontFamily={deviceLabelFontFamily}
+                fontStyle={deviceLabelFontWeight}
+                fill={deviceLabelColor}
+                align="center"
+                verticalAlign="middle"
               />
             )}
           </Group>
@@ -791,7 +1119,7 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
   }
 
   // No map data - fall back to simple view
-  if (!mapImageUrl && elements.length === 0) {
+  if (!mapImageUrl && elements.length === 0 && uploadedImages.length === 0) {
     return (
       <div className="h-full bg-card rounded-2xl shadow-lg border-2 border-border overflow-hidden">
         <div className="h-full relative bg-secondary/30">
@@ -901,7 +1229,7 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
               onTouchEnd={handleTouchEnd}
             >
               <Layer>
-                {/* Background image */}
+                {/* Background image (legacy) */}
                 {loadedImage && (
                   <KonvaImage
                     image={loadedImage}
@@ -910,6 +1238,42 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
                     opacity={0.9}
                   />
                 )}
+
+                {/* Uploaded images from localStorage */}
+                {uploadedImages.map((uploadedImg) => (
+                  uploadedImg.image && (
+                    <Group key={uploadedImg.id} x={uploadedImg.x} y={uploadedImg.y}>
+                      <KonvaImage
+                        image={uploadedImg.image}
+                        width={uploadedImg.width}
+                        height={uploadedImg.height}
+                        opacity={0.9}
+                      />
+                      {/* Eraser strokes (destination-out composite) */}
+                      {uploadedImg.eraserStrokes && uploadedImg.eraserStrokes.length > 0 && (
+                        <Group>
+                          {uploadedImg.eraserStrokes.map((stroke: number[], strokeIndex: number) => {
+                            // Extract eraser size (last element) from stroke array
+                            const strokeSize = stroke[stroke.length - 1] || 40;
+                            const points = stroke.slice(0, -1); // All but last element are coordinates
+                            return (
+                              <Line
+                                key={`eraser-${uploadedImg.id}-${strokeIndex}`}
+                                points={points}
+                                stroke="#ffffff"
+                                strokeWidth={strokeSize}
+                                tension={0.5}
+                                lineCap="round"
+                                lineJoin="round"
+                                globalCompositeOperation="destination-out"
+                              />
+                            );
+                          })}
+                        </Group>
+                      )}
+                    </Group>
+                  )
+                ))}
 
                 {/* Map elements (shapes, text, etc.) */}
                 {elements

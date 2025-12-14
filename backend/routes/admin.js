@@ -999,6 +999,131 @@ router.get('/stores/:id/map/status', async (req, res) => {
   }
 });
 
+// ============================================
+// UPLOADED IMAGES ENDPOINTS (for map editor)
+// ============================================
+
+// Get uploaded images for a store map
+router.get('/stores/:id/map/uploaded-images', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { published } = req.query;
+
+    // Get from store_maps table
+    const result = await query(
+      'SELECT map_data FROM store_maps WHERE store_id = $1',
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      // No map data yet, return empty array
+      return res.json({ uploadedImages: [] });
+    }
+
+    const mapData = result.rows[0].map_data || {};
+
+    // If published=true, return published images; otherwise return draft images
+    const images = published === 'true'
+      ? (mapData.publishedImages || mapData.uploadedImages || [])
+      : (mapData.uploadedImages || []);
+
+    res.json({ uploadedImages: images });
+  } catch (error) {
+    console.error('Error fetching uploaded images:', error);
+    res.status(500).json({ error: 'Failed to fetch uploaded images', details: error.message });
+  }
+});
+
+// Save uploaded images for a store map (draft)
+router.post('/stores/:id/map/uploaded-images', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { uploadedImages } = req.body;
+
+    if (!Array.isArray(uploadedImages)) {
+      return res.status(400).json({ error: 'uploadedImages must be an array' });
+    }
+
+    // Check if store_maps entry exists
+    const existing = await query(
+      'SELECT map_id, map_data FROM store_maps WHERE store_id = $1',
+      [id]
+    );
+
+    if (existing.rows.length === 0) {
+      // Create new entry
+      await query(
+        `INSERT INTO store_maps (store_id, map_data)
+         VALUES ($1, $2)`,
+        [id, JSON.stringify({ uploadedImages })]
+      );
+    } else {
+      // Update existing entry, preserving other map_data fields
+      const currentMapData = existing.rows[0].map_data || {};
+      const newMapData = {
+        ...currentMapData,
+        uploadedImages
+      };
+
+      await query(
+        `UPDATE store_maps SET map_data = $1, updated_at = CURRENT_TIMESTAMP WHERE store_id = $2`,
+        [JSON.stringify(newMapData), id]
+      );
+    }
+
+    // Mark store as having draft changes
+    await query(
+      'UPDATE stores SET map_has_draft_changes = true WHERE store_id = $1',
+      [id]
+    );
+
+    console.log(`[SAVE IMAGES] Saved ${uploadedImages.length} images for store ${id}`);
+
+    res.json({ success: true, count: uploadedImages.length });
+  } catch (error) {
+    console.error('Error saving uploaded images:', error);
+    res.status(500).json({ error: 'Failed to save uploaded images', details: error.message });
+  }
+});
+
+// Publish uploaded images (copy draft to published)
+router.post('/stores/:id/map/uploaded-images/publish', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Get current map data
+    const result = await query(
+      'SELECT map_data FROM store_maps WHERE store_id = $1',
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.json({ success: true, count: 0 });
+    }
+
+    const mapData = result.rows[0].map_data || {};
+    const draftImages = mapData.uploadedImages || [];
+
+    // Copy draft images to published images
+    const newMapData = {
+      ...mapData,
+      publishedImages: draftImages
+    };
+
+    await query(
+      `UPDATE store_maps SET map_data = $1, updated_at = CURRENT_TIMESTAMP WHERE store_id = $2`,
+      [JSON.stringify(newMapData), id]
+    );
+
+    console.log(`[PUBLISH IMAGES] Published ${draftImages.length} images for store ${id}`);
+
+    res.json({ success: true, count: draftImages.length });
+  } catch (error) {
+    console.error('Error publishing uploaded images:', error);
+    res.status(500).json({ error: 'Failed to publish uploaded images', details: error.message });
+  }
+});
+
 // Get products for preview selector (only products with map links)
 router.get('/stores/:storeId/products/preview', async (req, res) => {
   try {

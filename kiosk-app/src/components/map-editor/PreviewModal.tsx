@@ -8,7 +8,8 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import type { MapElement, AnimationStyle } from './types';
-import { CANVAS_WIDTH, CANVAS_HEIGHT, calculateFitToViewScale } from './types';
+import { CANVAS_WIDTH, CANVAS_HEIGHT, calculateFitToViewScale, getStrokeDash } from './types';
+import { getGradientProps } from './GradientEditor';
 
 interface PreviewProduct {
   id: number;
@@ -21,17 +22,29 @@ interface PreviewProduct {
   mapElementId?: number;
 }
 
+interface UploadedImage {
+  id: string;
+  url: string;
+  image: HTMLImageElement | null;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  eraserStrokes: number[][];
+}
+
 interface PreviewModalProps {
   isOpen: boolean;
   onClose: () => void;
   storeId: number;
   elements: MapElement[];
   mapImageUrl: string | null;
+  uploadedImages?: UploadedImage[];
 }
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
-const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl }: PreviewModalProps) => {
+const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl, uploadedImages = [] }: PreviewModalProps) => {
   const [products, setProducts] = useState<PreviewProduct[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<PreviewProduct | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -206,6 +219,85 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl }: Previ
     };
   }, [activeSmartPins, elements, getAnimationConfig]);
 
+  // Run animations for static pins (always animate when they have an animation style)
+  useEffect(() => {
+    if (!stageRef.current || !isOpen) return;
+
+    const staticPinsWithAnimation = elements.filter(
+      el => (el.type === 'static-pin' || el.type === 'device-pin') && el.visible && el.animationStyle && el.animationStyle > 0
+    );
+
+    if (staticPinsWithAnimation.length === 0) return;
+
+    const stage = stageRef.current;
+    const cleanupFunctions: (() => void)[] = [];
+
+    staticPinsWithAnimation.forEach(element => {
+      const nodeId = element.type === 'device-pin' ? `#device-pin-${element.id}` : `#static-pin-${element.id}`;
+      const node = stage.findOne(nodeId);
+      if (!node) return;
+
+      const config = getAnimationConfig(element.animationStyle as AnimationStyle, node.y(), element.motionScale || 1);
+      if (!config) return;
+
+      const originalProps = {
+        scaleX: node.scaleX(),
+        scaleY: node.scaleY(),
+        opacity: node.opacity(),
+        y: node.y(),
+      };
+
+      let isRunning = true;
+
+      const runAnimation = () => {
+        if (!isRunning) return;
+
+        const forwardTween = new Konva.Tween({
+          node,
+          duration: config.duration,
+          easing: config.easing,
+          ...config.properties,
+          onFinish: () => {
+            if (!isRunning) return;
+            const reverseTween = new Konva.Tween({
+              node,
+              duration: config.duration,
+              easing: config.easing,
+              scaleX: originalProps.scaleX,
+              scaleY: originalProps.scaleY,
+              opacity: originalProps.opacity,
+              y: originalProps.y,
+              onFinish: () => {
+                if (isRunning) {
+                  setTimeout(runAnimation, 200);
+                }
+              },
+            });
+            reverseTween.play();
+          },
+        });
+        forwardTween.play();
+      };
+
+      // Start animation after a short delay to ensure node is rendered
+      setTimeout(runAnimation, 100);
+
+      cleanupFunctions.push(() => {
+        isRunning = false;
+        if (node) {
+          node.scaleX(originalProps.scaleX);
+          node.scaleY(originalProps.scaleY);
+          node.opacity(originalProps.opacity);
+          node.y(originalProps.y);
+        }
+      });
+    });
+
+    return () => {
+      cleanupFunctions.forEach(cleanup => cleanup());
+    };
+  }, [isOpen, elements, getAnimationConfig]);
+
   // Shape helper functions
   const getTrapezoidPoints = (width: number, height: number): number[] => {
     const topOffset = width * 0.2;
@@ -232,6 +324,8 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl }: Previ
       x: element.x,
       y: element.y,
       rotation: element.rotation,
+      scaleX: element.scaleX || 1,
+      scaleY: element.scaleY || 1,
     };
 
     switch (element.type) {
@@ -242,11 +336,12 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl }: Previ
             {...commonProps}
             width={element.width}
             height={element.height}
-            fill={element.fillColor}
+            {...getGradientProps(element)}
             opacity={element.fillOpacity}
             stroke={element.strokeColor}
             strokeWidth={element.strokeWidth}
             cornerRadius={element.cornerRadius}
+            dash={getStrokeDash(element.strokeStyle)}
           />
         );
       case 'circle':
@@ -255,10 +350,11 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl }: Previ
             key={element.id}
             {...commonProps}
             radius={element.width / 2}
-            fill={element.fillColor}
+            {...getGradientProps(element)}
             opacity={element.fillOpacity}
             stroke={element.strokeColor}
             strokeWidth={element.strokeWidth}
+            dash={getStrokeDash(element.strokeStyle)}
           />
         );
       case 'triangle':
@@ -272,6 +368,7 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl }: Previ
             opacity={element.fillOpacity}
             stroke={element.strokeColor}
             strokeWidth={element.strokeWidth}
+            dash={getStrokeDash(element.strokeStyle)}
           />
         );
       case 'trapezoid':
@@ -285,6 +382,7 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl }: Previ
             opacity={element.fillOpacity}
             stroke={element.strokeColor}
             strokeWidth={element.strokeWidth}
+            dash={getStrokeDash(element.strokeStyle)}
           />
         );
       case 'parallelogram':
@@ -298,6 +396,7 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl }: Previ
             opacity={element.fillOpacity}
             stroke={element.strokeColor}
             strokeWidth={element.strokeWidth}
+            dash={getStrokeDash(element.strokeStyle)}
           />
         );
       case 'polygon':
@@ -311,6 +410,7 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl }: Previ
             opacity={element.fillOpacity}
             stroke={element.strokeColor}
             strokeWidth={element.strokeWidth}
+            dash={getStrokeDash(element.strokeStyle)}
           />
         );
       case 'line':
@@ -320,6 +420,7 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl }: Previ
             points={element.points || [0, 0, 100, 0]}
             stroke={element.strokeColor}
             strokeWidth={element.strokeWidth}
+            dash={getStrokeDash(element.strokeStyle)}
           />
         );
       case 'arrow':
@@ -329,9 +430,21 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl }: Previ
             points={element.points || [0, 0, 100, 0]}
             stroke={element.strokeColor}
             strokeWidth={element.strokeWidth}
+            dash={getStrokeDash(element.strokeStyle)}
           />
         );
       case 'text':
+        // Calculate text effects
+        const previewTextShadowEnabled = element.textShadow?.enabled || element.textGlow?.enabled;
+        const previewTextShadowColor = element.textGlow?.enabled
+          ? element.textGlow.color
+          : (element.textShadow?.color || '#000000');
+        const previewTextShadowBlur = element.textGlow?.enabled
+          ? element.textGlow.blur
+          : (element.textShadow?.blur || 0);
+        const previewTextShadowOffsetX = element.textGlow?.enabled ? 0 : (element.textShadow?.offsetX || 0);
+        const previewTextShadowOffsetY = element.textGlow?.enabled ? 0 : (element.textShadow?.offsetY || 0);
+
         return (
           <KonvaText
             key={element.id}
@@ -342,6 +455,16 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl }: Previ
             fill={element.fillColor}
             align={element.textAlign}
             width={element.width}
+            letterSpacing={element.letterSpacing || 0}
+            lineHeight={element.lineHeight || 1}
+            textDecoration={element.textDecoration || 'none'}
+            shadowEnabled={previewTextShadowEnabled}
+            shadowColor={previewTextShadowColor}
+            shadowBlur={previewTextShadowBlur}
+            shadowOffsetX={previewTextShadowOffsetX}
+            shadowOffsetY={previewTextShadowOffsetY}
+            stroke={element.textOutline?.enabled ? element.textOutline.color : undefined}
+            strokeWidth={element.textOutline?.enabled ? element.textOutline.width : 0}
           />
         );
       case 'freehand':
@@ -354,6 +477,7 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl }: Previ
             tension={0.5}
             lineCap="round"
             lineJoin="round"
+            dash={getStrokeDash(element.strokeStyle)}
           />
         );
       case 'static-pin':
@@ -362,12 +486,13 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl }: Previ
         const staticPinHeight = (element.height || 55) * 0.7;
         const staticPointerHeight = (element.height || 55) * 0.3;
         const staticCornerRadius = 6;
-        const staticLabelFontSize = element.pinLabelFontSize || 12;
+        const staticLabelFontSize = element.pinLabelFontSize || 16;
         const staticLabelColor = element.pinLabelColor || '#ffffff';
-        const staticLabelFontWeight = element.pinLabelFontWeight || 'bold';
+        const staticLabelFontWeight = element.pinLabelFontWeight || 'normal';
+        const staticLabelFontFamily = element.pinLabelFontFamily || 'Inter, system-ui, -apple-system, sans-serif';
 
         return (
-          <Group key={element.id} x={element.x} y={element.y}>
+          <Group key={element.id} id={`static-pin-${element.id}`} x={element.x} y={element.y}>
             {/* Rectangle body with rounded corners */}
             <Rect
               x={-staticPinWidth / 2}
@@ -409,13 +534,88 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl }: Previ
               <KonvaText
                 text={element.pinLabel}
                 x={-staticPinWidth / 2}
-                y={-staticPinHeight - staticPointerHeight + (staticPinHeight - staticLabelFontSize) / 2}
+                y={-staticPinHeight - staticPointerHeight}
                 width={staticPinWidth}
+                height={staticPinHeight}
                 fontSize={staticLabelFontSize}
-                fontFamily="Arial, sans-serif"
+                fontFamily={staticLabelFontFamily}
                 fontStyle={staticLabelFontWeight}
                 fill={staticLabelColor}
                 align="center"
+                verticalAlign="middle"
+              />
+            )}
+          </Group>
+        );
+      case 'device-pin':
+        // Kiosk/screen design with monitor and stand (no pointer)
+        const devicePinWidth = element.width || 50;
+        const devicePinHeight = element.height || 60;
+        const screenHeight = devicePinHeight * 0.70;
+        const standHeight = devicePinHeight * 0.30;
+        const screenCornerRadius = 4;
+        const deviceLabelFontSize = element.pinLabelFontSize || 14;
+        const deviceLabelColor = element.pinLabelColor || '#ffffff';
+        const deviceLabelFontWeight = element.pinLabelFontWeight || 'normal';
+        const deviceLabelFontFamily = element.pinLabelFontFamily || 'Inter, system-ui, -apple-system, sans-serif';
+
+        return (
+          <Group key={element.id} id={`device-pin-${element.id}`} x={element.x} y={element.y}>
+            {/* Screen/monitor body */}
+            <Rect
+              x={-devicePinWidth / 2}
+              y={-screenHeight - standHeight}
+              width={devicePinWidth}
+              height={screenHeight}
+              fill={element.fillColor}
+              opacity={element.fillOpacity}
+              stroke={element.strokeColor}
+              strokeWidth={element.strokeWidth}
+              cornerRadius={screenCornerRadius}
+            />
+            {/* Screen inner area (darker) */}
+            <Rect
+              x={-devicePinWidth / 2 + 4}
+              y={-screenHeight - standHeight + 4}
+              width={devicePinWidth - 8}
+              height={screenHeight - 8}
+              fill="#000000"
+              opacity={0.3}
+              cornerRadius={2}
+            />
+            {/* Stand neck */}
+            <Rect
+              x={-devicePinWidth * 0.1}
+              y={-standHeight}
+              width={devicePinWidth * 0.2}
+              height={standHeight * 0.6}
+              fill={element.strokeColor}
+              opacity={element.fillOpacity}
+            />
+            {/* Stand base */}
+            <Rect
+              x={-devicePinWidth * 0.35}
+              y={-standHeight * 0.4}
+              width={devicePinWidth * 0.7}
+              height={standHeight * 0.4}
+              fill={element.strokeColor}
+              opacity={element.fillOpacity}
+              cornerRadius={2}
+            />
+            {/* Pin label inside screen */}
+            {element.pinLabel && (
+              <KonvaText
+                text={element.pinLabel}
+                x={-devicePinWidth / 2 + 4}
+                y={-screenHeight - standHeight + 4}
+                width={devicePinWidth - 8}
+                height={screenHeight - 8}
+                fontSize={deviceLabelFontSize}
+                fontFamily={deviceLabelFontFamily}
+                fontStyle={deviceLabelFontWeight}
+                fill={deviceLabelColor}
+                align="center"
+                verticalAlign="middle"
               />
             )}
           </Group>
@@ -691,6 +891,40 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl }: Previ
                         height={CANVAS_HEIGHT}
                       />
                     )}
+
+                    {/* Render uploaded images from the editor */}
+                    {uploadedImages.map((uploadedImg) => (
+                      uploadedImg.image && (
+                        <Group
+                          key={uploadedImg.id}
+                          x={uploadedImg.x}
+                          y={uploadedImg.y}
+                        >
+                          <KonvaImage
+                            image={uploadedImg.image}
+                            width={uploadedImg.width}
+                            height={uploadedImg.height}
+                            opacity={0.9}
+                          />
+                          {/* Eraser strokes - use destination-out to cut from the image */}
+                          {uploadedImg.eraserStrokes.map((stroke, i) => {
+                            const strokeSize = stroke[stroke.length - 1];
+                            const points = stroke.slice(0, -1);
+                            return (
+                              <Line
+                                key={`eraser-${uploadedImg.id}-${i}`}
+                                points={points}
+                                stroke="#ffffff"
+                                strokeWidth={strokeSize}
+                                lineCap="round"
+                                lineJoin="round"
+                                globalCompositeOperation="destination-out"
+                              />
+                            );
+                          })}
+                        </Group>
+                      )
+                    ))}
 
                     {/* Render non-smart-pin elements */}
                     {elements

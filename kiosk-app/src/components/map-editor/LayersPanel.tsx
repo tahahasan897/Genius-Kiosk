@@ -1,9 +1,10 @@
-import { Eye, EyeOff, Lock, Unlock, GripVertical, Trash2 } from 'lucide-react';
+import { Eye, EyeOff, Lock, Unlock, GripVertical, Trash2, Search, X, ChevronRight, ChevronDown, Folder } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import type { MapElement } from './types';
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 
 interface LayersPanelProps {
   elements: MapElement[];
@@ -27,6 +28,10 @@ const getElementIcon = (type: MapElement['type']) => {
     case 'triangle': return '△';
     case 'trapezoid': return '⏢';
     case 'parallelogram': return '▱';
+    case 'smart-pin': return '📍';
+    case 'static-pin': return '📌';
+    case 'device-pin': return '📱';
+    case 'group': return '📁';
     default: return '□';
   }
 };
@@ -42,6 +47,9 @@ const LayersPanel = ({
 }: LayersPanelProps) => {
   const [draggedId, setDraggedId] = useState<string | null>(null);
 
+  // Search state
+  const [searchQuery, setSearchQuery] = useState('');
+
   // Inline editing state
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState('');
@@ -49,6 +57,18 @@ const LayersPanel = ({
 
   // Sort elements by zIndex in reverse (highest first for layer order)
   const sortedElements = [...elements].sort((a, b) => b.zIndex - a.zIndex);
+
+  // Filter elements based on search query
+  const filteredElements = useMemo(() => {
+    if (!searchQuery.trim()) return sortedElements;
+
+    const query = searchQuery.toLowerCase();
+    return sortedElements.filter(el => {
+      const name = el.name || `${el.type} ${el.id.slice(-4)}`;
+      return name.toLowerCase().includes(query) ||
+             el.type.toLowerCase().includes(query);
+    });
+  }, [sortedElements, searchQuery]);
 
   // Focus input when editing starts
   useEffect(() => {
@@ -141,18 +161,42 @@ const LayersPanel = ({
 
   return (
     <div className="h-full bg-card border-l border-border flex flex-col overflow-hidden">
-      <div className="px-4 py-3 border-b border-border flex-shrink-0">
+      <div className="px-4 py-3 border-b border-border flex-shrink-0 space-y-2">
         <h3 className="font-semibold text-sm truncate">Layers</h3>
+        <div className="relative">
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+          <Input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search layers..."
+            className="h-8 pl-7 pr-7 text-sm"
+          />
+          {searchQuery && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="absolute right-0 top-1/2 -translate-y-1/2 h-8 w-8"
+              onClick={() => setSearchQuery('')}
+            >
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          )}
+        </div>
+        {searchQuery && (
+          <p className="text-[10px] text-muted-foreground">
+            {filteredElements.length} of {sortedElements.length} layers
+          </p>
+        )}
       </div>
 
       <ScrollArea className="flex-1">
         <div className="p-2 space-y-1">
-          {sortedElements.length === 0 ? (
+          {filteredElements.length === 0 ? (
             <p className="text-sm text-muted-foreground text-center py-8 px-2 break-words">
-              No elements yet. Use the tools to add shapes.
+              {searchQuery ? 'No matching layers found.' : 'No elements yet. Use the tools to add shapes.'}
             </p>
           ) : (
-            sortedElements.map((element) => (
+            filteredElements.map((element) => (
               <div
                 key={element.id}
                 draggable={editingId !== element.id}

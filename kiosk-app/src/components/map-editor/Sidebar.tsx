@@ -7,13 +7,7 @@ import {
   Hexagon,
   Type,
   Pencil,
-  Trash2,
   Triangle,
-  Shapes,
-  Hand,
-  MapPin,
-  Link,
-  Info,
   Eraser,
   Upload
 } from 'lucide-react';
@@ -27,8 +21,6 @@ import type { Tool, ElementType } from './types';
 interface ToolbarProps {
   activeTool: Tool;
   onToolChange: (tool: Tool) => void;
-  onDeleteSelected: () => void;
-  hasSelection: boolean;
   onUploadClick: () => void;
 }
 
@@ -69,6 +61,24 @@ const StaticPinIcon = ({ className = "h-5 w-5" }: { className?: string }) => (
   </svg>
 );
 
+// Device Pin icon - kiosk/screen with stand
+const DevicePinIcon = ({ className = "h-5 w-5" }: { className?: string }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+    {/* Screen/monitor */}
+    <rect x="3" y="2" width="18" height="12" rx="1" ry="1" />
+    {/* Screen inner area */}
+    <rect x="5" y="4" width="14" height="8" rx="0.5" fill="currentColor" opacity="0.2" />
+    {/* Stand neck */}
+    <path d="M12 14 L12 18" />
+    {/* Stand base */}
+    <path d="M7 18 L17 18" />
+    {/* Screen shine */}
+    <path d="M6 5 L8 5" strokeWidth="1.5" />
+    {/* Pointer at bottom */}
+    <path d="M9 18 L12 22 L15 18" fill="currentColor" />
+  </svg>
+);
+
 const shapeTools: { id: Tool; icon: React.ElementType; label: string }[] = [
   { id: 'rectangle', icon: Square, label: 'Rectangle' },
   { id: 'circle', icon: Circle, label: 'Circle' },
@@ -81,23 +91,30 @@ const shapeTools: { id: Tool; icon: React.ElementType; label: string }[] = [
 ];
 
 const pinTools: { id: Tool; icon: React.ElementType; label: string; description: string; color: string }[] = [
-  { 
-    id: 'smart-pin', 
-    icon: SmartPinIcon, 
+  {
+    id: 'smart-pin',
+    icon: SmartPinIcon,
     label: 'Smart Pin',
     description: 'Link products to this location',
     color: 'text-red-500'
   },
-  { 
-    id: 'static-pin', 
-    icon: StaticPinIcon, 
+  {
+    id: 'static-pin',
+    icon: StaticPinIcon,
     label: 'Static Pin',
     description: 'Add labels (Restroom, Cashier, etc.)',
     color: 'text-green-500'
   },
+  {
+    id: 'device-pin',
+    icon: DevicePinIcon,
+    label: 'Device Pin',
+    description: 'Mark kiosk or screen locations',
+    color: 'text-indigo-500'
+  },
 ];
 
-const Sidebar = ({ activeTool, onToolChange, onDeleteSelected, hasSelection, onUploadClick }: ToolbarProps) => {
+const Sidebar = ({ activeTool, onToolChange, onUploadClick }: ToolbarProps) => {
 
   const handleDragStart = (e: React.DragEvent, toolType: Tool) => {
     e.dataTransfer.setData('toolType', toolType);
@@ -222,6 +239,9 @@ const Sidebar = ({ activeTool, onToolChange, onDeleteSelected, hasSelection, onU
                 <p className="leading-relaxed break-words whitespace-normal">
                   <span className="text-green-500 font-medium">Static Pins</span> - Drag to map for fixed labels like "Restroom" or "Exit".
                 </p>
+                <p className="leading-relaxed break-words whitespace-normal">
+                  <span className="text-indigo-500 font-medium">Device Pins</span> - Mark kiosk or screen locations on the map.
+                </p>
               </div>
             </div>
           </ScrollArea>
@@ -260,18 +280,6 @@ const Sidebar = ({ activeTool, onToolChange, onDeleteSelected, hasSelection, onU
           </div>
         </TabsContent>
       </Tabs>
-
-      <div className="p-4 border-t border-border">
-        <Button
-          variant="destructive"
-          className="w-full"
-          onClick={onDeleteSelected}
-          disabled={!hasSelection}
-        >
-          <Trash2 className="h-4 w-4 mr-2" />
-          Delete Selected
-        </Button>
-      </div>
     </div>
   );
 };

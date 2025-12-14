@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Search, Link, Unlink, CheckSquare, Square, Loader2, Package, Save } from 'lucide-react';
+import { Search, Link, Unlink, CheckSquare, Square, Loader2, Package } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -38,9 +38,6 @@ const LinksPanel = ({ element, storeId }: LinksPanelProps) => {
 
   // Check if element is a smart pin
   const isSmartPin = element?.type === 'smart-pin';
-  
-  // Track if pin is unsaved (not in database yet)
-  const [isUnsavedPin, setIsUnsavedPin] = useState(false);
 
   // Fetch products with link status
   const fetchProducts = useCallback(async () => {
@@ -69,21 +66,19 @@ const LinksPanel = ({ element, storeId }: LinksPanelProps) => {
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
         const errorMessage = errorData.error || 'Failed to fetch products';
-        
-        // If pin not found, it might be a new element that hasn't been saved yet
+
+        // If pin not found, it might be a new element that is still being saved (auto-save in progress)
+        // Just show empty products and wait for the next fetch cycle
         if (response.status === 404 || errorMessage.includes('not found') || errorMessage.includes('Pin not found') || errorMessage.includes('save your map')) {
-          setIsUnsavedPin(true);
           setProducts([]);
           setLinkedCount(0);
-          // Don't show error for unsaved pins - this is expected
+          // Don't show error - auto-save should complete shortly
           return;
         }
-        
+
         throw new Error(errorMessage);
       }
-      
-      // Pin exists in database
-      setIsUnsavedPin(false);
+
       const data = await response.json();
       setProducts(data.products || []);
       setLinkedCount((data.products || []).filter((p: ProductWithLink) => p.is_linked).length);
@@ -311,19 +306,6 @@ const LinksPanel = ({ element, storeId }: LinksPanelProps) => {
     );
   }
 
-  if (element.persisted === false) {
-    return (
-      <div className="h-full flex flex-col items-center justify-center p-6 text-center space-y-3">
-        <Save className="h-12 w-12 text-muted-foreground" />
-        <div>
-          <p className="text-sm font-medium mb-1">Save your map to link products</p>
-          <p className="text-xs text-muted-foreground">
-            Click the <span className="font-semibold">Save</span> button in the editor, then reselect this pin to link products.
-          </p>
-        </div>
-      </div>
-    );
-  }
 
   if (!isSmartPin) {
     return (
@@ -341,16 +323,6 @@ const LinksPanel = ({ element, storeId }: LinksPanelProps) => {
     <div className="h-full flex flex-col overflow-hidden">
       {/* Header */}
       <div className="p-4 border-b border-border space-y-3 flex-shrink-0">
-        {isUnsavedPin && (
-          <div className="mb-2 p-3 bg-yellow-50 dark:bg-yellow-900/30 border-2 border-yellow-400 dark:border-yellow-600 rounded-lg">
-            <p className="text-sm font-semibold text-yellow-900 dark:text-yellow-100 mb-1">
-              ⚠️ Map Not Saved
-            </p>
-            <p className="text-xs text-yellow-800 dark:text-yellow-200">
-              Please click the <strong>Save</strong> button in the editor toolbar to save this pin to the database before linking products.
-            </p>
-          </div>
-        )}
         <div className="flex items-center justify-between">
           <div>
             <h3 className="font-semibold text-sm">Product Links</h3>
@@ -381,7 +353,7 @@ const LinksPanel = ({ element, storeId }: LinksPanelProps) => {
             size="sm"
             className="flex-1 h-8 text-xs"
             onClick={selectAll}
-            disabled={saving || loading || isUnsavedPin}
+            disabled={saving || loading}
           >
             <CheckSquare className="h-3 w-3 mr-1" />
             Select All
@@ -391,7 +363,7 @@ const LinksPanel = ({ element, storeId }: LinksPanelProps) => {
             size="sm"
             className="flex-1 h-8 text-xs"
             onClick={deselectAll}
-            disabled={saving || loading || isUnsavedPin}
+            disabled={saving || loading}
           >
             <Square className="h-3 w-3 mr-1" />
             Deselect All
@@ -420,20 +392,15 @@ const LinksPanel = ({ element, storeId }: LinksPanelProps) => {
                   className={`
                     flex items-center gap-3 p-2 rounded-lg transition-all duration-200 relative
                     ${processingProductId === product.product_id ? 'opacity-60 cursor-wait' : ''}
-                    ${!isUnsavedPin && processingProductId !== product.product_id ? 'cursor-pointer hover:bg-muted/70 hover:scale-[1.01]' : 'cursor-not-allowed'}
-                    ${product.is_linked 
-                      ? 'bg-primary/10 border border-primary/30 shadow-sm' 
+                    ${processingProductId !== product.product_id ? 'cursor-pointer hover:bg-muted/70 hover:scale-[1.01]' : 'cursor-not-allowed'}
+                    ${product.is_linked
+                      ? 'bg-primary/10 border border-primary/30 shadow-sm'
                       : 'border border-transparent hover:border-border'
                     }
                   `}
                   onClick={() => {
                     if (processingProductId === product.product_id || saving) return;
-                    
-                    if (isUnsavedPin) {
-                      toast.info('Please save your map first before linking products');
-                    } else {
-                      toggleProductLink(product);
-                    }
+                    toggleProductLink(product);
                   }}
                 >
                   {processingProductId === product.product_id ? (
@@ -441,11 +408,11 @@ const LinksPanel = ({ element, storeId }: LinksPanelProps) => {
                   ) : (
                   <Checkbox
                     checked={product.is_linked}
-                      disabled={saving || isUnsavedPin || processingProductId === product.product_id}
+                    disabled={saving || processingProductId === product.product_id}
                     className="pointer-events-none"
-                      onCheckedChange={() => {
-                        // Prevent checkbox from being toggled directly - use the row click instead
-                      }}
+                    onCheckedChange={() => {
+                      // Prevent checkbox from being toggled directly - use the row click instead
+                    }}
                   />
                   )}
                   

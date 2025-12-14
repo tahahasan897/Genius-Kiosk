@@ -296,15 +296,13 @@ BREAD001,White Bread,Soft white sandwich bread,Bakery,2.99,3,C,25,t,https://imag
               )}
             <Button
               variant="outline"
-              size="lg"
-              className="h-12"
+              size="icon"
               onClick={() => {
                 // Settings button - currently non-functional
                 // TODO: Open settings modal/page
               }}
             >
-              <Settings className="mr-2 h-5 w-5" />
-              Settings
+              <Settings className="h-5 w-5" />
             </Button>
             </div>
           </div>
