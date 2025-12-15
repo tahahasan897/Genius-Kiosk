@@ -561,7 +561,7 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl, uploade
 
         return (
           <Group key={element.id} id={`device-pin-${element.id}`} x={element.x} y={element.y}>
-            {/* Screen/monitor body */}
+            {/* Screen/monitor body - no stroke, single color (matches editor) */}
             <Rect
               x={-devicePinWidth / 2}
               y={-screenHeight - standHeight}
@@ -569,36 +569,34 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl, uploade
               height={screenHeight}
               fill={element.fillColor}
               opacity={element.fillOpacity}
-              stroke={element.strokeColor}
-              strokeWidth={element.strokeWidth}
               cornerRadius={screenCornerRadius}
             />
-            {/* Screen inner area (darker) */}
+            {/* Screen inner area (darker overlay for depth) */}
             <Rect
               x={-devicePinWidth / 2 + 4}
               y={-screenHeight - standHeight + 4}
               width={devicePinWidth - 8}
               height={screenHeight - 8}
               fill="#000000"
-              opacity={0.3}
+              opacity={0.25}
               cornerRadius={2}
             />
-            {/* Stand neck */}
+            {/* Stand neck - same color as body (matches editor) */}
             <Rect
               x={-devicePinWidth * 0.1}
               y={-standHeight}
               width={devicePinWidth * 0.2}
               height={standHeight * 0.6}
-              fill={element.strokeColor}
+              fill={element.fillColor}
               opacity={element.fillOpacity}
             />
-            {/* Stand base */}
+            {/* Stand base - same color as body (matches editor) */}
             <Rect
               x={-devicePinWidth * 0.35}
               y={-standHeight * 0.4}
               width={devicePinWidth * 0.7}
               height={standHeight * 0.4}
-              fill={element.strokeColor}
+              fill={element.fillColor}
               opacity={element.fillOpacity}
               cornerRadius={2}
             />
@@ -908,7 +906,7 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl, uploade
                           />
                           {/* Eraser strokes - use destination-out to cut from the image */}
                           {uploadedImg.eraserStrokes.map((stroke, i) => {
-                            const strokeSize = stroke[stroke.length - 1];
+                            const strokeSize = stroke[stroke.length - 1] || 40;
                             const points = stroke.slice(0, -1);
                             return (
                               <Line
@@ -916,6 +914,7 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl, uploade
                                 points={points}
                                 stroke="#ffffff"
                                 strokeWidth={strokeSize}
+                                tension={0.5}
                                 lineCap="round"
                                 lineJoin="round"
                                 globalCompositeOperation="destination-out"

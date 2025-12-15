@@ -2,6 +2,57 @@ import axios from 'axios';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
+// Dashboard Types
+export interface GettingStartedStep {
+  id: string;
+  title: string;
+  description?: string;
+  completed: boolean;
+  action?: string; // Tab to navigate to
+}
+
+export interface Notification {
+  id: string;
+  type: 'info' | 'warning' | 'error' | 'success';
+  title: string;
+  message?: string;
+  action?: string; // Tab to navigate to
+  timestamp?: string;
+}
+
+export interface AnalyticsSummary {
+  topSearchedProduct?: {
+    name: string;
+    searchCount: number;
+  };
+  totalSearches: number;
+  searchesToday: number;
+  topCategories?: Array<{
+    name: string;
+    count: number;
+  }>;
+}
+
+export interface DashboardStats {
+  totalProducts: number;
+  linkedProducts: number;
+  unlinkedProducts: number;
+  lowStockCount: number;
+  outOfStockCount: number;
+  missingImagesCount: number;
+  missingLocationCount: number;
+  mapHasDraftChanges: boolean;
+  mapIsPublished: boolean;
+  lastPublishedAt?: string;
+  gettingStarted: {
+    steps: GettingStartedStep[];
+    completedSteps: number;
+    totalSteps: number;
+  };
+  notifications: Notification[];
+  analytics?: AnalyticsSummary;
+}
+
 export interface AdminProduct {
     product_id: number;
     sku: string;
@@ -10,6 +61,8 @@ export interface AdminProduct {
     base_price: number;
     aisle: string;
     shelf: string;
+    stock_quantity: number;
+    is_available: boolean;
     image_url: string;
     description: string;
     created_at: string;
@@ -61,6 +114,14 @@ export const importProducts = async (file: File, storeId: string = '1'): Promise
         headers: {
             'Content-Type': 'multipart/form-data',
         },
+    });
+    return response.data;
+};
+
+// Dashboard
+export const getDashboardStats = async (storeId: number = 1): Promise<DashboardStats> => {
+    const response = await axios.get(`${API_URL}/api/admin/dashboard`, {
+        params: { storeId }
     });
     return response.data;
 };

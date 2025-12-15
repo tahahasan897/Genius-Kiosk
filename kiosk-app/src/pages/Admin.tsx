@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Upload, Plus, Edit, Trash2, LogOut, FileSpreadsheet, CheckCircle2, AlertCircle, Download, FileUp, Settings, RefreshCw } from 'lucide-react';
+import { Upload, Plus, Edit, Trash2, LogOut, FileSpreadsheet, CheckCircle2, AlertCircle, Download, FileUp, Settings, RefreshCw, LayoutDashboard, FileDown } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -44,10 +44,12 @@ import {
   type AdminProduct,
 } from '@/api/admin';
 import MapEditor from '@/components/MapEditor';
+import Dashboard from '@/components/admin/Dashboard';
 
 const Admin = () => {
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
+  const [activeTab, setActiveTab] = useState('dashboard');
   const [products, setProducts] = useState<AdminProduct[]>([]);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
@@ -68,6 +70,17 @@ const Admin = () => {
     image_url: '',
     description: '',
   });
+
+  // Handle navigation from dashboard
+  const handleNavigateToTab = (tab: string) => {
+    if (tab === 'preview') {
+      window.open('/', '_blank');
+      // Mark preview as completed in localStorage
+      localStorage.setItem('kioskPreviewCompleted', 'true');
+    } else {
+      setActiveTab(tab);
+    }
+  };
 
   // Import drag-and-drop state
   const [isDragging, setIsDragging] = useState(false);
@@ -167,7 +180,7 @@ const Admin = () => {
 APPL001,Red Apples,Fresh red apples from local farms,Produce,3.99,1,A,50,t,https://images.unsplash.com/photo-1560806887-1e4cd0b6cbd6?w=400
 MILK001,Whole Milk,Fresh whole milk 1 gallon,Dairy,4.29,2,B,30,t,https://images.unsplash.com/photo-1563636619-e9143da7973b?w=400
 BREAD001,White Bread,Soft white sandwich bread,Bakery,2.99,3,C,25,t,https://images.unsplash.com/photo-1549931319-a545dcf3bc73?w=400`;
-    
+
     const blob = new Blob([sampleData], { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -178,6 +191,52 @@ BREAD001,White Bread,Soft white sandwich bread,Bakery,2.99,3,C,25,t,https://imag
     document.body.removeChild(a);
     window.URL.revokeObjectURL(url);
     toast.success('Sample CSV downloaded!');
+  };
+
+  const handleExportProducts = async () => {
+    try {
+      // Fetch all products for export (not just current page)
+      const response = await getAdminProducts(1, 10000);
+      const allProducts = response.products;
+
+      if (allProducts.length === 0) {
+        toast.error('No products to export');
+        return;
+      }
+
+      // Build CSV content
+      const headers = ['sku', 'product_name', 'description', 'category', 'base_price', 'aisle', 'shelf_position', 'image_url'];
+      const csvRows = [headers.join(',')];
+
+      allProducts.forEach((product) => {
+        const row = [
+          `"${(product.sku || '').replace(/"/g, '""')}"`,
+          `"${(product.product_name || '').replace(/"/g, '""')}"`,
+          `"${(product.description || '').replace(/"/g, '""')}"`,
+          `"${(product.category || '').replace(/"/g, '""')}"`,
+          product.base_price || '',
+          `"${(product.aisle || '').replace(/"/g, '""')}"`,
+          `"${(product.shelf || '').replace(/"/g, '""')}"`,
+          `"${(product.image_url || '').replace(/"/g, '""')}"`,
+        ];
+        csvRows.push(row.join(','));
+      });
+
+      const csvContent = csvRows.join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `products_export_${new Date().toISOString().split('T')[0]}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+      toast.success(`Exported ${allProducts.length} products`);
+    } catch (error) {
+      console.error('Export error:', error);
+      toast.error('Failed to export products');
+    }
   };
 
   const handleCreateProduct = () => {
@@ -311,14 +370,22 @@ BREAD001,White Bread,Soft white sandwich bread,Bakery,2.99,3,C,25,t,https://imag
 
       {/* Main Content */}
       <div className="container mx-auto px-8 py-8">
-        <Tabs defaultValue="products" className="space-y-6">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
           <div className="flex justify-center">
             <TabsList>
+              <TabsTrigger value="dashboard" className="gap-2">
+                <LayoutDashboard className="h-4 w-4" />
+                Dashboard
+              </TabsTrigger>
               <TabsTrigger value="products">Products</TabsTrigger>
               <TabsTrigger value="import">Import</TabsTrigger>
               <TabsTrigger value="map">Store Map</TabsTrigger>
             </TabsList>
           </div>
+
+          <TabsContent value="dashboard" className="space-y-6">
+            <Dashboard onNavigateToTab={handleNavigateToTab} storeId={1} />
+          </TabsContent>
 
           <TabsContent value="products" className="space-y-6">
             <Card>
@@ -328,10 +395,16 @@ BREAD001,White Bread,Soft white sandwich bread,Bakery,2.99,3,C,25,t,https://imag
                     <CardTitle>Products ({total})</CardTitle>
                     <CardDescription>Manage your product catalog</CardDescription>
                   </div>
-                  <Button onClick={handleCreateProduct} size="lg" className="h-12">
-                    <Plus className="mr-2 h-5 w-5" />
-                    Add Product
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button onClick={handleExportProducts} variant="outline" size="lg" className="h-12">
+                      <FileDown className="mr-2 h-5 w-5" />
+                      Export
+                    </Button>
+                    <Button onClick={handleCreateProduct} size="lg" className="h-12">
+                      <Plus className="mr-2 h-5 w-5" />
+                      Add Product
+                    </Button>
+                  </div>
                 </div>
               </CardHeader>
               <CardContent>
@@ -361,6 +434,7 @@ BREAD001,White Bread,Soft white sandwich bread,Bakery,2.99,3,C,25,t,https://imag
                             <TableHead>Price</TableHead>
                             <TableHead>Aisle</TableHead>
                             <TableHead>Shelf</TableHead>
+                            <TableHead>Stock</TableHead>
                             <TableHead className="max-w-[200px]">Description</TableHead>
                             <TableHead className="text-right">Actions</TableHead>
                           </TableRow>
@@ -387,6 +461,15 @@ BREAD001,White Bread,Soft white sandwich bread,Bakery,2.99,3,C,25,t,https://imag
                               <TableCell>${Number(product.base_price).toFixed(2)}</TableCell>
                               <TableCell>{product.aisle || '-'}</TableCell>
                               <TableCell>{product.shelf || '-'}</TableCell>
+                              <TableCell>
+                                <span className={
+                                  product.stock_quantity === 0 ? 'text-red-500 font-medium' :
+                                  product.stock_quantity && product.stock_quantity < 10 ? 'text-amber-500 font-medium' :
+                                  ''
+                                }>
+                                  {product.stock_quantity ?? '-'}
+                                </span>
+                              </TableCell>
                               <TableCell className="max-w-[200px] truncate text-sm text-muted-foreground" title={product.description || ''}>
                                 {product.description || '-'}
                               </TableCell>

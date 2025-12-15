@@ -1229,8 +1229,8 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
               onTouchEnd={handleTouchEnd}
             >
               <Layer>
-                {/* Background image (legacy) */}
-                {loadedImage && (
+                {/* Background image (legacy) - only show if no uploaded images exist */}
+                {loadedImage && uploadedImages.length === 0 && (
                   <KonvaImage
                     image={loadedImage}
                     width={CANVAS_WIDTH}
@@ -1239,7 +1239,7 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
                   />
                 )}
 
-                {/* Uploaded images from localStorage */}
+                {/* Uploaded images (with eraser strokes support) */}
                 {uploadedImages.map((uploadedImg) => (
                   uploadedImg.image && (
                     <Group key={uploadedImg.id} x={uploadedImg.x} y={uploadedImg.y}>
@@ -1249,28 +1249,25 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
                         height={uploadedImg.height}
                         opacity={0.9}
                       />
-                      {/* Eraser strokes (destination-out composite) */}
-                      {uploadedImg.eraserStrokes && uploadedImg.eraserStrokes.length > 0 && (
-                        <Group>
-                          {uploadedImg.eraserStrokes.map((stroke: number[], strokeIndex: number) => {
-                            // Extract eraser size (last element) from stroke array
-                            const strokeSize = stroke[stroke.length - 1] || 40;
-                            const points = stroke.slice(0, -1); // All but last element are coordinates
-                            return (
-                              <Line
-                                key={`eraser-${uploadedImg.id}-${strokeIndex}`}
-                                points={points}
-                                stroke="#ffffff"
-                                strokeWidth={strokeSize}
-                                tension={0.5}
-                                lineCap="round"
-                                lineJoin="round"
-                                globalCompositeOperation="destination-out"
-                              />
-                            );
-                          })}
-                        </Group>
-                      )}
+                      {/* Eraser strokes - use destination-out to cut from the image */}
+                      {/* Note: eraser Lines must be direct children of the image Group (no wrapper) for globalCompositeOperation to work */}
+                      {uploadedImg.eraserStrokes && uploadedImg.eraserStrokes.map((stroke: number[], strokeIndex: number) => {
+                        // Extract eraser size (last element) from stroke array
+                        const strokeSize = stroke[stroke.length - 1] || 40;
+                        const points = stroke.slice(0, -1); // All but last element are coordinates
+                        return (
+                          <Line
+                            key={`eraser-${uploadedImg.id}-${strokeIndex}`}
+                            points={points}
+                            stroke="#ffffff"
+                            strokeWidth={strokeSize}
+                            tension={0.5}
+                            lineCap="round"
+                            lineJoin="round"
+                            globalCompositeOperation="destination-out"
+                          />
+                        );
+                      })}
                     </Group>
                   )
                 ))}

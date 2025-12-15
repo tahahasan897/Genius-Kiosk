@@ -10,6 +10,229 @@ const router = express.Router();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// ============================================
+// DASHBOARD ENDPOINT
+// ============================================
+
+router.get('/dashboard', async (req, res) => {
+  try {
+    const { storeId = 1 } = req.query;
+    const storeIdParam = parseInt(storeId);
+
+    // Get total products count
+    const totalProductsResult = await query('SELECT COUNT(*) FROM products');
+    const totalProducts = parseInt(totalProductsResult.rows[0].count);
+
+    // Get linked products count (products with map links)
+    const linkedProductsResult = await query(
+      `SELECT COUNT(DISTINCT product_id) FROM product_map_links WHERE store_id = $1`,
+      [storeIdParam]
+    );
+    const linkedProducts = parseInt(linkedProductsResult.rows[0].count);
+
+    // Get low stock count (stock < 10)
+    const lowStockResult = await query(
+      `SELECT COUNT(*) FROM store_inventory WHERE store_id = $1 AND stock_quantity > 0 AND stock_quantity < 10`,
+      [storeIdParam]
+    );
+    const lowStockCount = parseInt(lowStockResult.rows[0].count);
+
+    // Get out of stock count
+    const outOfStockResult = await query(
+      `SELECT COUNT(*) FROM store_inventory WHERE store_id = $1 AND (stock_quantity = 0 OR is_available = false)`,
+      [storeIdParam]
+    );
+    const outOfStockCount = parseInt(outOfStockResult.rows[0].count);
+
+    // Get products missing images
+    const missingImagesResult = await query(
+      `SELECT COUNT(*) FROM products WHERE image_url IS NULL OR image_url = ''`
+    );
+    const missingImagesCount = parseInt(missingImagesResult.rows[0].count);
+
+    // Get products missing location data
+    const missingLocationResult = await query(
+      `SELECT COUNT(*) FROM products p
+       LEFT JOIN store_inventory si ON p.product_id = si.product_id AND si.store_id = $1
+       WHERE si.aisle IS NULL OR si.aisle = ''`,
+      [storeIdParam]
+    );
+    const missingLocationCount = parseInt(missingLocationResult.rows[0].count);
+
+    // Get map status
+    const mapStatusResult = await query(
+      `SELECT map_has_draft_changes, map_published_at FROM stores WHERE store_id = $1`,
+      [storeIdParam]
+    );
+    const mapStatus = mapStatusResult.rows[0] || {};
+    const mapHasDraftChanges = mapStatus.map_has_draft_changes || false;
+    const mapIsPublished = !!mapStatus.map_published_at;
+    const lastPublishedAt = mapStatus.map_published_at;
+
+    // Get map elements count (for getting started)
+    const mapElementsResult = await query(
+      `SELECT COUNT(*) FROM store_map_elements WHERE store_id = $1`,
+      [storeIdParam]
+    );
+    const mapElementsCount = parseInt(mapElementsResult.rows[0].count);
+
+    // Build Getting Started steps
+    const gettingStartedSteps = [
+      {
+        id: 'create-element',
+        title: 'Create your first map element',
+        description: 'Add a pin, shape, or text to your store map',
+        completed: mapElementsCount > 0,
+        action: 'map',
+      },
+      {
+        id: 'import-products',
+        title: 'Import products via CSV',
+        description: 'Bulk import your product catalog',
+        completed: totalProducts > 0,
+        action: 'import',
+      },
+      {
+        id: 'link-products',
+        title: 'Link products to map pins',
+        description: 'Connect products to locations on your map',
+        completed: linkedProducts > 0,
+        action: 'map',
+      },
+      {
+        id: 'preview-map',
+        title: 'Preview your kiosk map',
+        description: 'See how customers will view your store',
+        completed: false, // Tracked client-side via localStorage
+        action: 'preview',
+      },
+      {
+        id: 'publish-map',
+        title: 'Publish the map to go live',
+        description: 'Make your map visible to customers',
+        completed: mapIsPublished,
+        action: 'map',
+      },
+    ];
+
+    const completedSteps = gettingStartedSteps.filter(s => s.completed).length;
+
+    // Build notifications
+    const notifications = [];
+
+    // Map unpublished changes notification
+    if (mapHasDraftChanges) {
+      notifications.push({
+        id: 'map-draft',
+        type: 'warning',
+        title: 'Map has unpublished changes',
+        message: 'Your changes are saved but not visible to customers yet.',
+        action: 'map',
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Low stock notification
+    if (lowStockCount > 0) {
+      notifications.push({
+        id: 'low-stock',
+        type: 'warning',
+        title: `${lowStockCount} product${lowStockCount > 1 ? 's' : ''} low on stock`,
+        message: 'Consider restocking these items soon.',
+        action: 'products',
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Out of stock notification
+    if (outOfStockCount > 0) {
+      notifications.push({
+        id: 'out-of-stock',
+        type: 'error',
+        title: `${outOfStockCount} product${outOfStockCount > 1 ? 's' : ''} out of stock`,
+        message: 'These items are unavailable to customers.',
+        action: 'products',
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Missing images notification
+    if (missingImagesCount > 0) {
+      notifications.push({
+        id: 'missing-images',
+        type: 'info',
+        title: `${missingImagesCount} product${missingImagesCount > 1 ? 's' : ''} missing images`,
+        message: 'Add images to improve the shopping experience.',
+        action: 'products',
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Missing location notification
+    if (missingLocationCount > 0 && totalProducts > 0) {
+      notifications.push({
+        id: 'missing-location',
+        type: 'info',
+        title: `${missingLocationCount} product${missingLocationCount > 1 ? 's' : ''} missing aisle location`,
+        message: 'Add location data to help customers find products.',
+        action: 'products',
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Unlinked products notification (if there are products but few linked)
+    const unlinkedProducts = totalProducts - linkedProducts;
+    if (totalProducts > 0 && unlinkedProducts > 0 && linkedProducts < totalProducts * 0.5) {
+      notifications.push({
+        id: 'unlinked-products',
+        type: 'info',
+        title: `${unlinkedProducts} product${unlinkedProducts > 1 ? 's' : ''} not linked to map`,
+        message: 'Link products to pins so customers can find them.',
+        action: 'map',
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Success notification if map is published and no issues
+    if (mapIsPublished && notifications.length === 0) {
+      notifications.push({
+        id: 'map-published',
+        type: 'success',
+        title: 'Store map is live',
+        message: `Published ${lastPublishedAt ? new Date(lastPublishedAt).toLocaleDateString() : 'recently'}`,
+        timestamp: lastPublishedAt || new Date().toISOString(),
+      });
+    }
+
+    res.json({
+      totalProducts,
+      linkedProducts,
+      unlinkedProducts,
+      lowStockCount,
+      outOfStockCount,
+      missingImagesCount,
+      missingLocationCount,
+      mapHasDraftChanges,
+      mapIsPublished,
+      lastPublishedAt,
+      gettingStarted: {
+        steps: gettingStartedSteps,
+        completedSteps,
+        totalSteps: gettingStartedSteps.length,
+      },
+      notifications,
+      analytics: {
+        totalSearches: 0,
+        searchesToday: 0,
+        topCategories: [],
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching dashboard stats:', error);
+    res.status(500).json({ error: 'Failed to fetch dashboard stats', details: error.message });
+  }
+});
+
 // Configure multer for file uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {

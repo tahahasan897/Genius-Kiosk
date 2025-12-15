@@ -127,6 +127,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     const [isPublishing, setIsPublishing] = useState(false);
     const [lastPublishedElements, setLastPublishedElements] = useState<string>(''); // Track last published state for local comparison
     const [lastPublishedEraserStrokes, setLastPublishedEraserStrokes] = useState<string>(''); // Track last published eraser strokes
+    const [lastPublishedImages, setLastPublishedImages] = useState<string>(''); // Track last published uploaded images
+    const [hasLinkChanges, setHasLinkChanges] = useState(false); // Track if product links have changed since last publish
 
     // Contextual toolbar position
     const [toolbarPosition, setToolbarPosition] = useState<{ x: number; y: number } | null>(null);
@@ -447,11 +449,17 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     fontSize: el.fontSize, fontWeight: el.fontWeight
                 })));
                 setLastPublishedElements(publishedState);
-                // Also save eraser strokes state as published
-                setLastPublishedEraserStrokes(JSON.stringify(uploadedImages.map(img => ({
+                // Save uploaded images state as published (including position, size, eraser strokes)
+                setLastPublishedImages(JSON.stringify(uploadedImages.map(img => ({
                     id: img.id,
+                    x: img.x,
+                    y: img.y,
+                    width: img.width,
+                    height: img.height,
                     eraserStrokes: img.eraserStrokes
                 }))));
+                // Reset link changes flag after successful publish
+                setHasLinkChanges(false);
 
                 // Also update localStorage for backward compatibility
                 localStorage.setItem(`map-editor-images-${storeId}`, JSON.stringify(imagesToSave));
@@ -488,6 +496,9 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
 
     // Check if there are local draft changes by comparing current elements to last published state
     const hasLocalDraftChanges = useCallback(() => {
+        // Check if product links have changed
+        if (hasLinkChanges) return true;
+
         // Check if elements have changed
         if (lastPublishedElements === '') {
             if (elements.length > 0) return true; // No published state yet, any elements means changes
@@ -502,14 +513,18 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             fontSize: el.fontSize, fontWeight: el.fontWeight
         })));
 
-        // Check if eraser strokes on uploaded images have changed
-        const currentEraserState = JSON.stringify(uploadedImages.map(img => ({
+        // Check if uploaded images have changed (position, size, eraser strokes)
+        const currentImagesState = JSON.stringify(uploadedImages.map(img => ({
             id: img.id,
+            x: img.x,
+            y: img.y,
+            width: img.width,
+            height: img.height,
             eraserStrokes: img.eraserStrokes
         })));
 
-        return currentState !== lastPublishedElements || currentEraserState !== lastPublishedEraserStrokes;
-    }, [elements, lastPublishedElements, uploadedImages, lastPublishedEraserStrokes]);
+        return currentState !== lastPublishedElements || currentImagesState !== lastPublishedImages;
+    }, [elements, lastPublishedElements, uploadedImages, lastPublishedImages, hasLinkChanges]);
 
     // Load canvas state from localStorage when component mounts or storeId changes
     useEffect(() => {
@@ -1085,6 +1100,15 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             imagesLoadedFromDb = true;
                             // Also sync to localStorage for backup
                             localStorage.setItem(`map-editor-images-${storeId}`, JSON.stringify(savedImages));
+                            // Set initial published images state for draft comparison
+                            setLastPublishedImages(JSON.stringify(loadedImages.map(img => ({
+                                id: img.id,
+                                x: img.x,
+                                y: img.y,
+                                width: img.width,
+                                height: img.height,
+                                eraserStrokes: img.eraserStrokes
+                            }))));
                         }
                     }
                 }
@@ -1140,6 +1164,15 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             if (loadedImages.length > 0) {
                                 setUploadedImages(loadedImages);
                                 imagesLoadedFromDb = true; // Mark as loaded to skip legacy migration
+                                // Set initial published images state for draft comparison
+                                setLastPublishedImages(JSON.stringify(loadedImages.map(img => ({
+                                    id: img.id,
+                                    x: img.x,
+                                    y: img.y,
+                                    width: img.width,
+                                    height: img.height,
+                                    eraserStrokes: img.eraserStrokes
+                                }))));
                             }
                         }
                     } catch (parseError) {
@@ -6048,6 +6081,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             <LinksPanel
                                 element={selectedElement}
                                 storeId={storeId}
+                                onLinksChanged={() => setHasLinkChanges(true)}
                             />
                         </TabsContent>
                     </Tabs>

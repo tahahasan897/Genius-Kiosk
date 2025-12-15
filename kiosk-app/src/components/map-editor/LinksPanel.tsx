@@ -11,6 +11,7 @@ import type { MapElement } from './types';
 interface LinksPanelProps {
   element: MapElement | null;
   storeId: number;
+  onLinksChanged?: () => void; // Callback when product links are modified
 }
 
 interface ProductWithLink {
@@ -28,7 +29,7 @@ interface ProductWithLink {
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
-const LinksPanel = ({ element, storeId }: LinksPanelProps) => {
+const LinksPanel = ({ element, storeId, onLinksChanged }: LinksPanelProps) => {
   const [products, setProducts] = useState<ProductWithLink[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -159,7 +160,8 @@ const LinksPanel = ({ element, storeId }: LinksPanelProps) => {
         }
         
         toast.success(`✓ Unlinked ${product.product_name}`);
-        
+        onLinksChanged?.(); // Notify parent that links have changed
+
         // Refresh the product list to get updated link status
         await fetchProducts();
       } else {
@@ -195,7 +197,8 @@ const LinksPanel = ({ element, storeId }: LinksPanelProps) => {
         }
         
         toast.success(`✓ Linked ${product.product_name} to smart pin`);
-        
+        onLinksChanged?.(); // Notify parent that links have changed
+
         // Refresh the product list to get updated link status
         await fetchProducts();
       }
@@ -238,11 +241,12 @@ const LinksPanel = ({ element, storeId }: LinksPanelProps) => {
         throw new Error(errorData.error || 'Failed to link products');
       }
       
-      setProducts(prev => 
+      setProducts(prev =>
         prev.map(p => ({ ...p, is_linked: true }))
       );
       setLinkedCount(products.length);
       toast.success(`Linked ${unlinkedProducts.length} products`);
+      onLinksChanged?.(); // Notify parent that links have changed
     } catch (error: any) {
       console.error('Error linking all:', error);
       toast.error(error.message || 'Failed to link products');
@@ -281,11 +285,12 @@ const LinksPanel = ({ element, storeId }: LinksPanelProps) => {
         throw new Error(errorData.error || 'Failed to unlink products');
       }
       
-      setProducts(prev => 
+      setProducts(prev =>
         prev.map(p => ({ ...p, is_linked: false, link_id: null }))
       );
       setLinkedCount(0);
       toast.success(`Unlinked ${linkedProducts.length} products`);
+      onLinksChanged?.(); // Notify parent that links have changed
     } catch (error: any) {
       console.error('Error unlinking all:', error);
       toast.error(error.message || 'Failed to unlink products');
