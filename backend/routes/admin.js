@@ -345,6 +345,7 @@ router.post('/products', async (req, res) => {
       shelf,
       image_url,
       description,
+      stock_quantity,
       storeId = 1 // Default to store 1
     } = req.body;
 
@@ -369,16 +370,17 @@ router.post('/products', async (req, res) => {
     const newProduct = productResult.rows[0];
 
     // Insert into store_inventory table
-    // We need to handle aisle and shelf (shelf_position)
-    if (aisle || shelf) {
+    // We need to handle aisle, shelf (shelf_position), and stock_quantity
+    if (aisle || shelf || stock_quantity !== undefined) {
       await client.query(
         `INSERT INTO store_inventory (store_id, product_id, aisle, shelf_position, stock_quantity, is_available)
          VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (store_id, product_id) DO UPDATE SET
            aisle = EXCLUDED.aisle,
            shelf_position = EXCLUDED.shelf_position,
+           stock_quantity = EXCLUDED.stock_quantity,
            last_updated = CURRENT_TIMESTAMP`,
-        [storeId, newProduct.product_id, aisle || null, shelf || null, 0, true] // Default stock 0, available true
+        [storeId, newProduct.product_id, aisle || null, shelf || null, stock_quantity !== undefined ? parseInt(stock_quantity) : 0, true]
       );
     }
 
@@ -388,7 +390,8 @@ router.post('/products', async (req, res) => {
     const finalResult = {
       ...newProduct,
       aisle,
-      shelf
+      shelf,
+      stock_quantity: stock_quantity !== undefined ? parseInt(stock_quantity) : 0
     };
 
     res.status(201).json(finalResult);
@@ -420,6 +423,7 @@ router.put('/products/:id', async (req, res) => {
       shelf,
       image_url,
       description,
+      stock_quantity,
       storeId = 1 // Default to store 1
     } = req.body;
 
@@ -441,15 +445,16 @@ router.put('/products/:id', async (req, res) => {
     const updatedProduct = productResult.rows[0];
 
     // Update or insert into store_inventory table
-    if (aisle !== undefined || shelf !== undefined) {
+    if (aisle !== undefined || shelf !== undefined || stock_quantity !== undefined) {
       await client.query(
         `INSERT INTO store_inventory (store_id, product_id, aisle, shelf_position, stock_quantity, is_available)
-         VALUES ($1, $2, $3, $4, 0, TRUE)
+         VALUES ($1, $2, $3, $4, $5, TRUE)
          ON CONFLICT (store_id, product_id) DO UPDATE SET
            aisle = COALESCE(EXCLUDED.aisle, store_inventory.aisle),
            shelf_position = COALESCE(EXCLUDED.shelf_position, store_inventory.shelf_position),
+           stock_quantity = COALESCE(EXCLUDED.stock_quantity, store_inventory.stock_quantity),
            last_updated = CURRENT_TIMESTAMP`,
-        [storeId, id, aisle || null, shelf || null]
+        [storeId, id, aisle || null, shelf || null, stock_quantity !== undefined ? parseInt(stock_quantity) : 0]
       );
     }
 
@@ -457,7 +462,7 @@ router.put('/products/:id', async (req, res) => {
 
     // Fetch updated inventory details to return a complete product object
     const inventoryResult = await client.query(
-      `SELECT aisle, shelf_position FROM store_inventory WHERE store_id = $1 AND product_id = $2`,
+      `SELECT aisle, shelf_position, stock_quantity FROM store_inventory WHERE store_id = $1 AND product_id = $2`,
       [storeId, id]
     );
 
@@ -466,7 +471,8 @@ router.put('/products/:id', async (req, res) => {
     res.json({
       ...updatedProduct,
       aisle: inventoryData.aisle,
-      shelf: inventoryData.shelf_position
+      shelf: inventoryData.shelf_position,
+      stock_quantity: inventoryData.stock_quantity
     });
   } catch (error) {
     await client.query('ROLLBACK');

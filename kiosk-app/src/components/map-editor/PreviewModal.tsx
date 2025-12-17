@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Stage, Layer, Image as KonvaImage, Rect, Circle, Line, RegularPolygon, Group, Text as KonvaText } from 'react-konva';
 import Konva from 'konva';
 import useImage from 'use-image';
-import { X, Search, MapPin, Loader2 } from 'lucide-react';
+import { X, Search, MapPin, Loader2, ZoomIn, ZoomOut, Maximize } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -43,6 +43,7 @@ interface PreviewModalProps {
 }
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+const BASE_SCALE = 0.58; // Base scale for "100%" zoom
 
 const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl, uploadedImages = [] }: PreviewModalProps) => {
   const [products, setProducts] = useState<PreviewProduct[]>([]);
@@ -51,6 +52,10 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl, uploade
   const [loading, setLoading] = useState(false);
   const [activeSmartPins, setActiveSmartPins] = useState<string[]>([]);
   const [scale, setScale] = useState(1);
+  const [fitScale, setFitScale] = useState(1);
+  const [manualZoom, setManualZoom] = useState<number | null>(null);
+  const [stagePosition, setStagePosition] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<Konva.Stage>(null);
   const animationTweensRef = useRef<Map<string, { forward: Konva.Tween | null; reverse: Konva.Tween | null }>>(new Map());
@@ -101,6 +106,71 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl, uploade
     }
   }, [selectedProduct]);
 
+  // Smooth zoom transition to selected smart pin
+  useEffect(() => {
+    if (!selectedProduct?.mapElementId || !stageRef.current || !containerRef.current) return;
+
+    // Find the pin element
+    const pinElement = elements.find(
+      el => el.id === selectedProduct.mapElementId?.toString() && el.type === 'smart-pin'
+    );
+    if (!pinElement) return;
+
+    const stage = stageRef.current;
+    const container = containerRef.current;
+
+    // Target zoom level (zoom in closer to the pin)
+    const targetScale = Math.min(1.2, fitScale * 2); // Zoom in 2x from fit, max 1.2
+
+    // Calculate center position to focus on the pin
+    const containerWidth = container.offsetWidth;
+    const containerHeight = container.offsetHeight;
+
+    // Pin position in canvas coordinates
+    const pinX = pinElement.x;
+    const pinY = pinElement.y;
+
+    // Calculate stage position to center the pin
+    // Formula accounts for flex-centered Stage: offset = (canvasCenter - pinPosition) * scale
+    const targetX = (CANVAS_WIDTH / 2 - pinX) * targetScale;
+    const targetY = (CANVAS_HEIGHT / 2 - pinY) * targetScale;
+
+    // Get current values
+    const currentScale = scale;
+    const currentX = stagePosition.x;
+    const currentY = stagePosition.y;
+
+    // Animate using Konva Tween on the stage
+    const animationDuration = 0.6;
+
+    // Create animation object
+    const anim = new Konva.Animation((frame) => {
+      if (!frame) return;
+
+      const progress = Math.min(frame.time / (animationDuration * 1000), 1);
+      // Ease out cubic
+      const easeProgress = 1 - Math.pow(1 - progress, 3);
+
+      const newScale = currentScale + (targetScale - currentScale) * easeProgress;
+      const newX = currentX + (targetX - currentX) * easeProgress;
+      const newY = currentY + (targetY - currentY) * easeProgress;
+
+      setScale(newScale);
+      setManualZoom(newScale);
+      setStagePosition({ x: newX, y: newY });
+
+      if (progress >= 1) {
+        anim.stop();
+      }
+    }, stage.getLayers()[0]);
+
+    anim.start();
+
+    return () => {
+      anim.stop();
+    };
+  }, [selectedProduct?.mapElementId, elements, fitScale]);
+
   // Update scale based on container - uses shared utility for consistency
   // Uses 0 padding to match live map exactly (grid area = capture area)
   useEffect(() => {
@@ -111,7 +181,11 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl, uploade
           containerRef.current.offsetHeight,
           0 // Match live map - no padding for consistent zoom
         );
-        setScale(newScale);
+        setFitScale(newScale);
+        // Use manualZoom if set, otherwise use fitScale
+        if (manualZoom === null) {
+          setScale(newScale);
+        }
       }
     };
 
@@ -121,7 +195,75 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl, uploade
       window.addEventListener('resize', updateScale);
       return () => window.removeEventListener('resize', updateScale);
     }
+  }, [isOpen, manualZoom]);
+
+  // Apply manual zoom when it changes
+  useEffect(() => {
+    if (manualZoom !== null) {
+      setScale(manualZoom);
+    }
+  }, [manualZoom]);
+
+  // Reset zoom when modal closes
+  useEffect(() => {
+    if (!isOpen) {
+      setManualZoom(null);
+      setStagePosition({ x: 0, y: 0 });
+    }
   }, [isOpen]);
+
+  // Zoom handlers
+  const handleZoomIn = useCallback(() => {
+    setManualZoom(prev => {
+      const currentScale = prev !== null ? prev : fitScale;
+      return Math.min(currentScale * 1.25, 3);
+    });
+  }, [fitScale]);
+
+  const handleZoomOut = useCallback(() => {
+    setManualZoom(prev => {
+      const currentScale = prev !== null ? prev : fitScale;
+      return Math.max(currentScale / 1.25, 0.25);
+    });
+  }, [fitScale]);
+
+  const handleResetZoom = useCallback(() => {
+    setManualZoom(BASE_SCALE);
+    setStagePosition({ x: 0, y: 0 });
+  }, []);
+
+  // Mouse wheel zoom
+  const handleWheel = useCallback((e: Konva.KonvaEventObject<WheelEvent>) => {
+    e.evt.preventDefault();
+
+    const stage = stageRef.current;
+    if (!stage) return;
+
+    const oldScale = manualZoom !== null ? manualZoom : fitScale;
+    const pointer = stage.getPointerPosition();
+    if (!pointer) return;
+
+    const direction = e.evt.deltaY > 0 ? -1 : 1;
+    const zoomFactor = 1.1;
+
+    let newScale = direction > 0 ? oldScale * zoomFactor : oldScale / zoomFactor;
+    newScale = Math.max(0.25, Math.min(3, newScale));
+
+    setManualZoom(newScale);
+  }, [fitScale, manualZoom]);
+
+  // Drag handlers
+  const handleDragStart = useCallback(() => {
+    setIsDragging(true);
+  }, []);
+
+  const handleDragEnd = useCallback((e: Konva.KonvaEventObject<DragEvent>) => {
+    setIsDragging(false);
+    setStagePosition({
+      x: e.target.x(),
+      y: e.target.y()
+    });
+  }, []);
 
   // Animation helper function
   const getAnimationConfig = useCallback((style: AnimationStyle, baseY: number = 0, motionScale: number = 1) => {
@@ -629,9 +771,9 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl, uploade
       return null;
     }
 
-    // Build location text (e.g., "Aisle C5, Shelf 1" or "Aisle C5")
+    // Build location text (e.g., "C5-1" or "C5")
     const locationText = selectedProduct?.aisle
-      ? `Aisle ${selectedProduct.aisle}${selectedProduct.shelf ? `, Shelf ${selectedProduct.shelf}` : ''}`
+      ? `${selectedProduct.aisle}${selectedProduct.shelf ? `-${selectedProduct.shelf}` : ''}`
       : '';
 
     // Pin size calculations
@@ -644,21 +786,24 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl, uploade
     const pinFillColor = element.fillColor || '#ef4444';
     const pinStrokeColor = element.strokeColor || '#dc2626';
 
-    // Floating label dimensions
-    const labelFontSize = 12;
-    const labelPaddingX = 12;
-    const labelPaddingY = 8;
+    // Floating label dimensions - scale with pin size (1.5x the pin)
+    const labelScale = 1.5;
+    const baseLabelFontSize = 12;
+    const labelFontSize = Math.max(baseLabelFontSize, pinSize * 0.4 * labelScale);
+    const labelPaddingX = Math.max(12, pinSize * 0.3);
+    const labelPaddingY = Math.max(8, pinSize * 0.2);
     const labelHeight = labelFontSize + labelPaddingY * 2;
-    const textWidth = locationText.length * 7;
-    const labelWidth = Math.max(80, textWidth + labelPaddingX * 2);
+    const charWidth = labelFontSize * 0.6; // Approximate character width based on font size
+    const textWidth = locationText.length * charWidth;
+    const labelWidth = Math.max(pinSize * labelScale, textWidth + labelPaddingX * 2);
     const labelY = -pinSize - labelHeight - 12;
-    const labelRadius = 6;
-    const arrowWidth = 10;
-    const arrowHeight = 8;
+    const labelRadius = Math.max(6, pinSize * 0.15);
+    const arrowWidth = Math.max(10, pinSize * 0.25);
+    const arrowHeight = Math.max(8, pinSize * 0.2);
 
     return (
-      <Group key={`active-${element.id}`} id={`smart-pin-${element.id}`} x={element.x} y={element.y}>
-        {/* Floating label tooltip above the pin */}
+      <Group key={`active-${element.id}`} x={element.x} y={element.y}>
+        {/* Floating label tooltip above the pin - NOT animated */}
         {locationText && (
           <Group>
             {/* Label background */}
@@ -699,47 +844,50 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl, uploade
           </Group>
         )}
 
-        {/* Teardrop pin - outer circle (uses element's colors) */}
-        <Circle
-          x={0}
-          y={innerCircleY}
-          radius={pinRadius}
-          fill={pinFillColor}
-          stroke={pinStrokeColor}
-          strokeWidth={element.strokeWidth || 2}
-        />
+        {/* Animated pin group - only this gets animated */}
+        <Group id={`smart-pin-${element.id}`}>
+          {/* Teardrop pin - outer circle (uses element's colors) */}
+          <Circle
+            x={0}
+            y={innerCircleY}
+            radius={pinRadius}
+            fill={pinFillColor}
+            stroke={pinStrokeColor}
+            strokeWidth={element.strokeWidth || 2}
+          />
 
-        {/* Bottom triangle point of the teardrop */}
-        <Line
-          points={[
-            -pinRadius * 0.7, innerCircleY + pinRadius * 0.5,
-            pinRadius * 0.7, innerCircleY + pinRadius * 0.5,
-            0, pinSize * 0.35,
-          ]}
-          closed={true}
-          fill={pinFillColor}
-          stroke={pinStrokeColor}
-          strokeWidth={element.strokeWidth || 2}
-          lineJoin="round"
-        />
+          {/* Bottom triangle point of the teardrop */}
+          <Line
+            points={[
+              -pinRadius * 0.7, innerCircleY + pinRadius * 0.5,
+              pinRadius * 0.7, innerCircleY + pinRadius * 0.5,
+              0, pinSize * 0.35,
+            ]}
+            closed={true}
+            fill={pinFillColor}
+            stroke={pinStrokeColor}
+            strokeWidth={element.strokeWidth || 2}
+            lineJoin="round"
+          />
 
-        {/* Cover the stroke line between circle and triangle */}
-        <Line
-          points={[
-            -pinRadius * 0.65, innerCircleY + pinRadius * 0.5,
-            pinRadius * 0.65, innerCircleY + pinRadius * 0.5,
-          ]}
-          stroke={pinFillColor}
-          strokeWidth={4}
-        />
+          {/* Cover the stroke line between circle and triangle */}
+          <Line
+            points={[
+              -pinRadius * 0.65, innerCircleY + pinRadius * 0.5,
+              pinRadius * 0.65, innerCircleY + pinRadius * 0.5,
+            ]}
+            stroke={pinFillColor}
+            strokeWidth={4}
+          />
 
-        {/* Inner white circle (hollow center) */}
-        <Circle
-          x={0}
-          y={innerCircleY}
-          radius={innerCircleRadius}
-          fill="#ffffff"
-        />
+          {/* Inner white circle (hollow center) */}
+          <Circle
+            x={0}
+            y={innerCircleY}
+            radius={innerCircleRadius}
+            fill="#ffffff"
+          />
+        </Group>
       </Group>
     );
   };
@@ -868,18 +1016,50 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl, uploade
             {/* Uses same structure as StoreMap for consistent zoom behavior */}
             <div
               ref={containerRef}
-              className="flex-1 flex items-center justify-center overflow-hidden bg-muted/20"
+              className="flex-1 flex items-center justify-center overflow-hidden bg-muted/20 relative"
             >
-              <div
-                className="bg-white shadow-lg border overflow-hidden"
-              >
-                <Stage
+              {/* Zoom Controls */}
+              <div className="absolute bottom-3 left-3 z-10 flex flex-col gap-1.5 bg-white/95 backdrop-blur-sm border border-border rounded-lg shadow-sm p-1">
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleZoomIn} title="Zoom In">
+                  <ZoomIn className="h-4 w-4" />
+                </Button>
+                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleZoomOut} title="Zoom Out">
+                  <ZoomOut className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={handleResetZoom}
+                  title="Reset Zoom"
+                >
+                  <Maximize className="h-4 w-4" />
+                </Button>
+              </div>
+
+              {/* Zoom level indicator */}
+              <div className="absolute bottom-3 left-14 z-10 bg-white/95 backdrop-blur-sm border border-border rounded-md px-2 py-1 text-xs font-medium shadow-sm">
+                {Math.round((scale / BASE_SCALE) * 100)}%
+                {manualZoom === null && <span className="text-muted-foreground ml-1">(fit)</span>}
+              </div>
+
+              <Stage
                   ref={stageRef}
                   width={CANVAS_WIDTH * scale}
                   height={CANVAS_HEIGHT * scale}
                   scaleX={scale}
                   scaleY={scale}
-                  style={{ background: '#ffffff' }}
+                  x={stagePosition.x}
+                  y={stagePosition.y}
+                  draggable={true}
+                  onDragStart={handleDragStart}
+                  onDragEnd={handleDragEnd}
+                  onWheel={handleWheel}
+                  style={{
+                    background: '#ffffff',
+                    touchAction: 'none',
+                    cursor: isDragging ? 'grabbing' : 'grab'
+                  }}
                 >
                   <Layer>
                     {loadedImage && (
@@ -937,7 +1117,6 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl, uploade
                       .map(renderActiveSmartPin)}
                   </Layer>
                 </Stage>
-              </div>
             </div>
           </div>
         </div>

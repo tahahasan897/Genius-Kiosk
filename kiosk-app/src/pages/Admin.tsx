@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Upload, Plus, Edit, Trash2, LogOut, FileSpreadsheet, CheckCircle2, AlertCircle, Download, FileUp, Settings, RefreshCw, LayoutDashboard, FileDown } from 'lucide-react';
+import { Upload, Plus, Edit, Trash2, LogOut, FileSpreadsheet, CheckCircle2, AlertCircle, Download, FileUp, Settings, RefreshCw, FileDown } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -69,6 +69,7 @@ const Admin = () => {
     shelf: '',
     image_url: '',
     description: '',
+    stock_quantity: '',
   });
 
   // Handle navigation from dashboard
@@ -77,6 +78,22 @@ const Admin = () => {
       window.open('/', '_blank');
       // Mark preview as completed in localStorage
       localStorage.setItem('kioskPreviewCompleted', 'true');
+    } else if (tab === 'add-product') {
+      // Navigate to products tab and open the add product dialog
+      setActiveTab('products');
+      setSelectedProduct(null);
+      setFormData({
+        sku: '',
+        product_name: '',
+        category: '',
+        base_price: '',
+        aisle: '',
+        shelf: '',
+        image_url: '',
+        description: '',
+        stock_quantity: '',
+      });
+      setIsProductDialogOpen(true);
     } else {
       setActiveTab(tab);
     }
@@ -250,6 +267,7 @@ BREAD001,White Bread,Soft white sandwich bread,Bakery,2.99,3,C,25,t,https://imag
       shelf: '',
       image_url: '',
       description: '',
+      stock_quantity: '',
     });
     setIsProductDialogOpen(true);
   };
@@ -265,6 +283,7 @@ BREAD001,White Bread,Soft white sandwich bread,Bakery,2.99,3,C,25,t,https://imag
       shelf: product.shelf || '',
       image_url: product.image_url || '',
       description: product.description || '',
+      stock_quantity: product.stock_quantity?.toString() || '',
     });
     setIsProductDialogOpen(true);
   };
@@ -286,6 +305,7 @@ BREAD001,White Bread,Soft white sandwich bread,Bakery,2.99,3,C,25,t,https://imag
         shelf: formData.shelf || undefined,
         image_url: formData.image_url || undefined,
         description: formData.description || undefined,
+        stock_quantity: formData.stock_quantity ? parseInt(formData.stock_quantity) : undefined,
       };
 
       if (selectedProduct) {
@@ -373,8 +393,7 @@ BREAD001,White Bread,Soft white sandwich bread,Bakery,2.99,3,C,25,t,https://imag
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
           <div className="flex justify-center">
             <TabsList>
-              <TabsTrigger value="dashboard" className="gap-2">
-                <LayoutDashboard className="h-4 w-4" />
+              <TabsTrigger value="dashboard">
                 Dashboard
               </TabsTrigger>
               <TabsTrigger value="products">Products</TabsTrigger>
@@ -808,14 +827,25 @@ BREAD001,White Bread,Soft white sandwich bread,Bakery,2.99,3,C,25,t,https://imag
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="image_url">Image URL</Label>
+                <Label htmlFor="stock_quantity">Stock Quantity</Label>
                 <Input
-                  id="image_url"
-                  value={formData.image_url}
-                  onChange={(e) => setFormData({ ...formData, image_url: e.target.value })}
-                  placeholder="https://example.com/image.jpg"
+                  id="stock_quantity"
+                  type="number"
+                  min="0"
+                  value={formData.stock_quantity}
+                  onChange={(e) => setFormData({ ...formData, stock_quantity: e.target.value })}
+                  placeholder="0"
                 />
               </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="image_url">Image URL</Label>
+              <Input
+                id="image_url"
+                value={formData.image_url}
+                onChange={(e) => setFormData({ ...formData, image_url: e.target.value })}
+                placeholder="https://example.com/image.jpg"
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="description">Description</Label>

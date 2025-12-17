@@ -13,7 +13,15 @@ const ProductDetails = ({ product }: ProductDetailsProps) => {
       <div className="h-full overflow-y-auto p-8">
         {/* Product Image */}
         <div className="w-full aspect-square bg-muted rounded-xl mb-6 flex items-center justify-center overflow-hidden">
-          <Package className="h-32 w-32 text-muted-foreground" />
+          {product.image ? (
+            <img
+              src={product.image}
+              alt={product.name}
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            <Package className="h-32 w-32 text-muted-foreground" />
+          )}
         </div>
 
         {/* Product Name */}
@@ -36,7 +44,7 @@ const ProductDetails = ({ product }: ProductDetailsProps) => {
             <div>
               <h3 className="text-xl font-bold text-foreground mb-1">Location</h3>
               <p className="text-2xl font-semibold text-primary">
-                Aisle {product.aisle}, Shelf {product.shelf}
+                {product.aisle}-{product.shelf}
               </p>
             </div>
           </div>

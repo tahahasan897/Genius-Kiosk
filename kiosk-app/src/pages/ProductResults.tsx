@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Loader2 } from 'lucide-react';
 import SearchBar from '@/components/SearchBar';
 import StoreMap from '@/components/StoreMap';
 import ProductDetails from '@/components/ProductDetails';
@@ -48,6 +48,36 @@ const ProductResults = () => {
     navigate(`/results?q=${encodeURIComponent(newQuery)}`);
   };
 
+  // Show loading spinner while searching
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background flex flex-col">
+        <div className="border-b-2 border-border bg-card shadow-md">
+          <div className="container mx-auto px-8 py-6">
+            <Button
+              variant="ghost"
+              size="lg"
+              onClick={() => navigate('/')}
+              className="mb-4 text-lg h-12"
+            >
+              <ArrowLeft className="mr-2 h-6 w-6" />
+              Back to Search
+            </Button>
+            <SearchBar onSearch={handleNewSearch} initialValue={query} />
+          </div>
+        </div>
+
+        <div className="flex-1 flex items-center justify-center p-8">
+          <div className="text-center space-y-4">
+            <Loader2 className="h-12 w-12 animate-spin text-primary mx-auto" />
+            <p className="text-xl text-muted-foreground">Searching for products...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Show "No products found" only after loading completes
   if (!query || results.length === 0) {
     return (
       <div className="min-h-screen bg-background flex flex-col">
@@ -65,7 +95,7 @@ const ProductResults = () => {
             <SearchBar onSearch={handleNewSearch} initialValue={query} />
           </div>
         </div>
-        
+
         <div className="flex-1 flex items-center justify-center p-8">
           <div className="text-center space-y-4">
             <h2 className="text-3xl font-bold text-foreground">No products found</h2>

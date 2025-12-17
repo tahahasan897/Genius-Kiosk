@@ -313,6 +313,70 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
     }
   }, [selectedProduct]);
 
+  // Smooth zoom transition to selected smart pin
+  useEffect(() => {
+    if (!selectedProduct?.mapElementId || !stageRef.current || !containerRef.current) return;
+
+    // Find the pin element
+    const pinElement = elements.find(
+      el => el.id === selectedProduct.mapElementId?.toString() && el.type === 'smart-pin'
+    );
+    if (!pinElement) return;
+
+    const stage = stageRef.current;
+    const container = containerRef.current;
+
+    // Target zoom level (zoom in closer to the pin)
+    const targetScale = Math.min(1.2, fitScale * 2); // Zoom in 2x from fit, max 1.2
+
+    // Calculate center position to focus on the pin
+    const containerWidth = container.offsetWidth;
+    const containerHeight = container.offsetHeight;
+
+    // Pin position in canvas coordinates
+    const pinX = pinElement.x;
+    const pinY = pinElement.y;
+
+    // Calculate stage position to center the pin
+    // Formula accounts for flex-centered Stage: offset = (canvasCenter - pinPosition) * scale
+    const targetX = (CANVAS_WIDTH / 2 - pinX) * targetScale;
+    const targetY = (CANVAS_HEIGHT / 2 - pinY) * targetScale;
+
+    // Get current values
+    const currentScale = scale;
+    const currentX = stagePosition.x;
+    const currentY = stagePosition.y;
+
+    // Animate using Konva Animation
+    const animationDuration = 0.6;
+
+    const anim = new Konva.Animation((frame) => {
+      if (!frame) return;
+
+      const progress = Math.min(frame.time / (animationDuration * 1000), 1);
+      // Ease out cubic
+      const easeProgress = 1 - Math.pow(1 - progress, 3);
+
+      const newScale = currentScale + (targetScale - currentScale) * easeProgress;
+      const newX = currentX + (targetX - currentX) * easeProgress;
+      const newY = currentY + (targetY - currentY) * easeProgress;
+
+      setScale(newScale);
+      setManualZoom(newScale);
+      setStagePosition({ x: newX, y: newY });
+
+      if (progress >= 1) {
+        anim.stop();
+      }
+    }, stage.getLayers()[0]);
+
+    anim.start();
+
+    return () => {
+      anim.stop();
+    };
+  }, [selectedProduct?.mapElementId, elements, fitScale]);
+
   // Calculate scale to fit container using shared utility
   useEffect(() => {
     const updateScale = () => {
@@ -322,14 +386,23 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
           containerRef.current.offsetHeight
         );
         setFitScale(newFitScale);
-        // Use manual zoom if set, otherwise use auto-fit
-        setScale(manualZoom !== null ? manualZoom : newFitScale);
+        // Only set scale when manualZoom is null (to avoid interfering with animations)
+        if (manualZoom === null) {
+          setScale(newFitScale);
+        }
       }
     };
 
     updateScale();
     window.addEventListener('resize', updateScale);
     return () => window.removeEventListener('resize', updateScale);
+  }, [manualZoom]);
+
+  // Apply manual zoom when it changes (separate from fit calculation)
+  useEffect(() => {
+    if (manualZoom !== null) {
+      setScale(manualZoom);
+    }
   }, [manualZoom]);
 
   // Zoom controls
@@ -975,9 +1048,9 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
       return null;
     }
 
-    // Build location text (e.g., "Aisle C5, Shelf 1" or "Aisle C5")
+    // Build location text (e.g., "C5-1" or "C5")
     const locationText = selectedProduct?.aisle
-      ? `Aisle ${selectedProduct.aisle}${selectedProduct.shelf ? `, Shelf ${selectedProduct.shelf}` : ''}`
+      ? `${selectedProduct.aisle}${selectedProduct.shelf ? `-${selectedProduct.shelf}` : ''}`
       : '';
 
     // Pin size - use a fixed size for the teardrop
@@ -992,23 +1065,26 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
     const pinFillColor = element.fillColor || '#ef4444';
     const pinStrokeColor = element.strokeColor || '#dc2626';
 
-    // Floating label dimensions
-    const labelFontSize = 12;
-    const labelPaddingX = 12;
-    const labelPaddingY = 8;
+    // Floating label dimensions - scale with pin size (1.5x the pin)
+    const labelScale = 1.5;
+    const baseLabelFontSize = 12;
+    const labelFontSize = Math.max(baseLabelFontSize, pinSize * 0.4 * labelScale);
+    const labelPaddingX = Math.max(12, pinSize * 0.3);
+    const labelPaddingY = Math.max(8, pinSize * 0.2);
     const labelHeight = labelFontSize + labelPaddingY * 2;
-    const textWidth = locationText.length * 7;
-    const labelWidth = Math.max(80, textWidth + labelPaddingX * 2);
+    const charWidth = labelFontSize * 0.6; // Approximate character width based on font size
+    const textWidth = locationText.length * charWidth;
+    const labelWidth = Math.max(pinSize * labelScale, textWidth + labelPaddingX * 2);
     const labelY = -pinSize - labelHeight - 12; // Above the pin
-    const labelRadius = 6;
+    const labelRadius = Math.max(6, pinSize * 0.15);
 
-    // Arrow pointer connecting label to pin
-    const arrowWidth = 10;
-    const arrowHeight = 8;
+    // Arrow pointer connecting label to pin - scale with pin size
+    const arrowWidth = Math.max(10, pinSize * 0.25);
+    const arrowHeight = Math.max(8, pinSize * 0.2);
 
     return (
-      <Group key={`active-${element.id}`} id={`smart-pin-${element.id}`} x={element.x} y={element.y}>
-        {/* Floating label tooltip above the pin */}
+      <Group key={`active-${element.id}`} x={element.x} y={element.y}>
+        {/* Floating label tooltip above the pin - NOT animated */}
         {locationText && (
           <Group>
             {/* Label background */}
@@ -1049,47 +1125,50 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
           </Group>
         )}
 
-        {/* Teardrop pin - outer shape (uses element's colors) */}
-        <Circle
-          x={0}
-          y={innerCircleY}
-          radius={pinRadius}
-          fill={pinFillColor}
-          stroke={pinStrokeColor}
-          strokeWidth={element.strokeWidth || 2}
-        />
+        {/* Animated pin group - only this gets animated */}
+        <Group id={`smart-pin-${element.id}`}>
+          {/* Teardrop pin - outer shape (uses element's colors) */}
+          <Circle
+            x={0}
+            y={innerCircleY}
+            radius={pinRadius}
+            fill={pinFillColor}
+            stroke={pinStrokeColor}
+            strokeWidth={element.strokeWidth || 2}
+          />
 
-        {/* Bottom triangle point of the teardrop */}
-        <Line
-          points={[
-            -pinRadius * 0.7, innerCircleY + pinRadius * 0.5,
-            pinRadius * 0.7, innerCircleY + pinRadius * 0.5,
-            0, pinSize * 0.35,
-          ]}
-          closed={true}
-          fill={pinFillColor}
-          stroke={pinStrokeColor}
-          strokeWidth={element.strokeWidth || 2}
-          lineJoin="round"
-        />
+          {/* Bottom triangle point of the teardrop */}
+          <Line
+            points={[
+              -pinRadius * 0.7, innerCircleY + pinRadius * 0.5,
+              pinRadius * 0.7, innerCircleY + pinRadius * 0.5,
+              0, pinSize * 0.35,
+            ]}
+            closed={true}
+            fill={pinFillColor}
+            stroke={pinStrokeColor}
+            strokeWidth={element.strokeWidth || 2}
+            lineJoin="round"
+          />
 
-        {/* Cover the stroke line between circle and triangle */}
-        <Line
-          points={[
-            -pinRadius * 0.65, innerCircleY + pinRadius * 0.5,
-            pinRadius * 0.65, innerCircleY + pinRadius * 0.5,
-          ]}
-          stroke={pinFillColor}
-          strokeWidth={4}
-        />
+          {/* Cover the stroke line between circle and triangle */}
+          <Line
+            points={[
+              -pinRadius * 0.65, innerCircleY + pinRadius * 0.5,
+              pinRadius * 0.65, innerCircleY + pinRadius * 0.5,
+            ]}
+            stroke={pinFillColor}
+            strokeWidth={4}
+          />
 
-        {/* Inner white circle (hollow center) */}
-        <Circle
-          x={0}
-          y={innerCircleY}
-          radius={innerCircleRadius}
-          fill="#ffffff"
-        />
+          {/* Inner white circle (hollow center) */}
+          <Circle
+            x={0}
+            y={innerCircleY}
+            radius={innerCircleRadius}
+            fill="#ffffff"
+          />
+        </Group>
       </Group>
     );
   };

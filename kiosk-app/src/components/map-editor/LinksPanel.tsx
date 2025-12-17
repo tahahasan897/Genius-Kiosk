@@ -439,8 +439,7 @@ const LinksPanel = ({ element, storeId, onLinksChanged }: LinksPanelProps) => {
                     </p>
                     <p className="text-xs text-muted-foreground truncate">
                       {product.category}
-                      {product.aisle && ` • Aisle ${product.aisle}`}
-                      {product.shelf && `, Shelf ${product.shelf}`}
+                      {product.aisle && ` • ${product.aisle}${product.shelf ? `-${product.shelf}` : ''}`}
                     </p>
                   </div>
                   
