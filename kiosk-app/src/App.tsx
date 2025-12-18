@@ -3,12 +3,15 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
-import { AuthProvider, ProtectedRoute } from "@/contexts/AuthContext";
+import { AuthProvider, ProtectedRoute, SuperAdminRoute } from "@/contexts/AuthContext";
 import { ThemeProvider } from "@/contexts/ThemeContext";
+import { StoreProvider } from "@/contexts/StoreContext";
 import Search from "./pages/Search";
 import ProductResults from "./pages/ProductResults";
 import Admin from "./pages/Admin";
 import Login from "./pages/Login";
+import SuperAdmin from "./pages/SuperAdmin";
+import SuperAdminLogin from "./pages/SuperAdminLogin";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -21,20 +24,32 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
           <AuthProvider>
-        <Routes>
-          <Route path="/" element={<Search />} />
-          <Route path="/results" element={<ProductResults />} />
-              <Route path="/login" element={<Login />} />
-              <Route
-                path="/admin"
-                element={<Admin />}
-                  // <ProtectedRoute>
-                  //   <Admin />
-                  // </ProtectedRoute>
-              />
-          {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-          <Route path="*" element={<NotFound />} />
-        </Routes>
+            <StoreProvider>
+              <Routes>
+                <Route path="/" element={<Search />} />
+                <Route path="/results" element={<ProductResults />} />
+                <Route path="/login" element={<Login />} />
+                <Route
+                  path="/admin"
+                  element={
+                    <ProtectedRoute>
+                      <Admin />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route path="/super-admin/login" element={<SuperAdminLogin />} />
+                <Route
+                  path="/super-admin"
+                  element={
+                    <SuperAdminRoute>
+                      <SuperAdmin />
+                    </SuperAdminRoute>
+                  }
+                />
+                {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+            </StoreProvider>
           </AuthProvider>
       </BrowserRouter>
       </ThemeProvider>

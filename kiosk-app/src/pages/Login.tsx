@@ -11,7 +11,7 @@ import { Lock, Mail, ArrowLeft, KeyRound } from 'lucide-react';
 import { sendVerificationCode, verifyCode } from '@/api/auth';
 
 const Login = () => {
-  const { signInWithGoogle, signInWithEmail, signUpWithEmail, signOut, user, checkEmailExists } = useAuth();
+  const { signInWithGoogle, signInWithEmail, signUpWithEmail, signOut, user, checkEmailExists, resetPassword } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [loading, setLoading] = useState(false);
@@ -30,6 +30,10 @@ const Login = () => {
   // Error states for sign-in
   const [signInError, setSignInError] = useState<string | null>(null);
   const [hasError, setHasError] = useState(false);
+
+  // Forgot password state
+  const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [resetEmail, setResetEmail] = useState('');
 
   // Get the intended destination or default to /admin
   const from = (location.state as { from?: { pathname: string } })?.from?.pathname || '/admin';
@@ -205,6 +209,32 @@ const Login = () => {
     setPendingAction(null);
   };
 
+  const handleForgotPassword = async () => {
+    if (!resetEmail) {
+      toast.error('Please enter your email address');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await resetPassword(resetEmail);
+      toast.success('Password reset email sent! Check your inbox.');
+      setShowForgotPassword(false);
+      setResetEmail('');
+    } catch (error: any) {
+      const errorCode = error?.code || '';
+      if (errorCode === 'auth/user-not-found') {
+        toast.error('No account found with this email address.');
+      } else if (errorCode === 'auth/invalid-email') {
+        toast.error('Invalid email address.');
+      } else {
+        toast.error('Failed to send reset email. Please try again.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       {/* Subtle background pattern */}
@@ -245,7 +275,68 @@ const Login = () => {
             </TabsList>
 
             <TabsContent value="signin" className="space-y-4 mt-6">
-              {!showPasscodeInput ? (
+              {showForgotPassword ? (
+                <div className="space-y-4">
+                  <div className="text-center space-y-2">
+                    <div className="mx-auto mb-2 h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center">
+                      <Mail className="h-6 w-6 text-primary" />
+                    </div>
+                    <h3 className="text-lg font-semibold">Reset Your Password</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Enter your email and we'll send you a reset link
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="reset-email">Email</Label>
+                    <div className="relative">
+                      <Mail className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        id="reset-email"
+                        type="email"
+                        placeholder="you@example.com"
+                        value={resetEmail}
+                        onChange={(e) => setResetEmail(e.target.value)}
+                        className="pl-10"
+                        disabled={loading}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            handleForgotPassword();
+                          }
+                        }}
+                      />
+                    </div>
+                  </div>
+
+                  <Button
+                    onClick={handleForgotPassword}
+                    disabled={loading}
+                    className="w-full h-12 text-base font-medium"
+                  >
+                    {loading ? (
+                      <div className="flex items-center gap-3">
+                        <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" />
+                        <span>Sending...</span>
+                      </div>
+                    ) : (
+                      'Send Reset Link'
+                    )}
+                  </Button>
+
+                  <Button
+                    variant="ghost"
+                    onClick={() => {
+                      setShowForgotPassword(false);
+                      setResetEmail('');
+                    }}
+                    disabled={loading}
+                    className="w-full"
+                  >
+                    <ArrowLeft className="h-4 w-4 mr-2" />
+                    Back to Sign In
+                  </Button>
+                </div>
+              ) : !showPasscodeInput ? (
                 <>
                   <div className="space-y-2">
                     <Label htmlFor="email-signin">Email</Label>
@@ -318,6 +409,19 @@ const Login = () => {
                       'Sign In'
                     )}
                   </Button>
+
+                  <div className="text-center">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowForgotPassword(true);
+                        setResetEmail(email);
+                      }}
+                      className="text-sm text-primary hover:underline"
+                    >
+                      Forgot your password?
+                    </button>
+                  </div>
                 </>
               ) : (
                 <div className="space-y-4">

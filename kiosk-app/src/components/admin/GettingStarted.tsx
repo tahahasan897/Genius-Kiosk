@@ -1,7 +1,8 @@
 import { useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
-import { CheckCircle2, Circle, ArrowRight } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { CheckCircle2, Circle, ArrowRight, X } from 'lucide-react';
 import { type GettingStartedStep } from '@/api/admin';
 
 interface GettingStartedProps {
@@ -9,6 +10,8 @@ interface GettingStartedProps {
   completedSteps: number;
   totalSteps: number;
   onNavigateToTab: (tab: string) => void;
+  onDismiss: () => void;
+  chainId?: number;
 }
 
 const GettingStarted = ({
@@ -16,17 +19,19 @@ const GettingStarted = ({
   completedSteps,
   totalSteps,
   onNavigateToTab,
+  onDismiss,
+  chainId = 1,
 }: GettingStartedProps) => {
-  // Check localStorage for preview completion
+  // Check localStorage for preview completion (per chain)
   const enhancedSteps = useMemo(() => {
-    const previewCompleted = localStorage.getItem('kioskPreviewCompleted') === 'true';
+    const previewCompleted = localStorage.getItem(`kioskPreviewCompleted_${chainId}`) === 'true';
     return steps.map(step => {
       if (step.id === 'preview-map') {
         return { ...step, completed: previewCompleted };
       }
       return step;
     });
-  }, [steps]);
+  }, [steps, chainId]);
 
   const actualCompletedSteps = enhancedSteps.filter(s => s.completed).length;
   const progressPercent = Math.round((actualCompletedSteps / totalSteps) * 100);
@@ -42,9 +47,20 @@ const GettingStarted = ({
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
           <CardTitle className="text-lg">Getting Started</CardTitle>
-          <span className="text-sm font-medium text-muted-foreground">
-            {progressPercent}% Complete
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-muted-foreground">
+              {progressPercent}% Complete
+            </span>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={onDismiss}
+              title="Dismiss"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
         <Progress value={progressPercent} className="h-2 mt-2" />
       </CardHeader>

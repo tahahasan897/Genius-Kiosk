@@ -1,13 +1,14 @@
 import { initializeApp } from 'firebase/app';
-import { 
-  getAuth, 
-  GoogleAuthProvider, 
+import {
+  getAuth,
+  GoogleAuthProvider,
   signInWithPopup,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signOut as firebaseSignOut,
   onAuthStateChanged,
   fetchSignInMethodsForEmail,
+  sendPasswordResetEmail,
   type User
 } from 'firebase/auth';
 import type { FirebaseApp } from 'firebase/app';
@@ -132,6 +133,19 @@ export const checkEmailExists = async (email: string): Promise<{ exists: boolean
     console.error('Error checking email:', error);
     // If there's an error, assume email doesn't exist
     return { exists: false, methods: [] };
+  }
+};
+
+// Reset password
+export const resetPassword = async (email: string) => {
+  if (!auth) {
+    throw new Error('Firebase is not configured. Please check your .env file.');
+  }
+  try {
+    await sendPasswordResetEmail(auth, email);
+  } catch (error: any) {
+    console.error('Error sending password reset email:', error);
+    throw error;
   }
 };
 

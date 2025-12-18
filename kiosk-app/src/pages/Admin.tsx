@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Upload, Plus, Edit, Trash2, LogOut, FileSpreadsheet, CheckCircle2, AlertCircle, Download, FileUp, Settings, RefreshCw, FileDown } from 'lucide-react';
-import { useAuth } from '@/contexts/AuthContext';
+import { Upload, Plus, Edit, Trash2, FileSpreadsheet, CheckCircle2, AlertCircle, Download, FileUp, RefreshCw, FileDown } from 'lucide-react';
+// Auth is handled by SettingsMenu
+import { useStore } from '@/contexts/StoreContext';
+import SettingsMenu from '@/components/admin/SettingsMenu';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -48,7 +50,8 @@ import Dashboard from '@/components/admin/Dashboard';
 
 const Admin = () => {
   const navigate = useNavigate();
-  const { user, signOut } = useAuth();
+  // Auth is now handled by SettingsMenu component
+  const { currentStoreId, currentChainId } = useStore();
   const [activeTab, setActiveTab] = useState('dashboard');
   const [products, setProducts] = useState<AdminProduct[]>([]);
   const [loading, setLoading] = useState(false);
@@ -76,8 +79,8 @@ const Admin = () => {
   const handleNavigateToTab = (tab: string) => {
     if (tab === 'preview') {
       window.open('/', '_blank');
-      // Mark preview as completed in localStorage
-      localStorage.setItem('kioskPreviewCompleted', 'true');
+      // Mark preview as completed in localStorage (per chain)
+      localStorage.setItem(`kioskPreviewCompleted_${currentChainId || 1}`, 'true');
     } else if (tab === 'add-product') {
       // Navigate to products tab and open the add product dialog
       setActiveTab('products');
@@ -138,7 +141,7 @@ const Admin = () => {
     setLoading(true);
     setImportResult(null);
     try {
-      const result = await importProducts(file, '1');
+      const result = await importProducts(file, String(currentChainId || 1));
       setImportResult({
         success: true,
         imported: result.imported,
@@ -359,30 +362,7 @@ BREAD001,White Bread,Soft white sandwich bread,Bakery,2.99,3,C,25,t,https://imag
                 <p className="text-muted-foreground">Manage products and inventory</p>
               </div>
             <div className="flex items-center gap-4">
-              {user && (
-                <div className="flex items-center gap-3">
-                  <span className="text-sm text-muted-foreground">{user.email}</span>
-                  <Button
-                    onClick={signOut}
-                    variant="ghost"
-                    size="sm"
-                    className="text-muted-foreground hover:text-foreground"
-                  >
-                    <LogOut className="h-4 w-4 mr-2" />
-                    Sign out
-                  </Button>
-            </div>
-              )}
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => {
-                // Settings button - currently non-functional
-                // TODO: Open settings modal/page
-              }}
-            >
-              <Settings className="h-5 w-5" />
-            </Button>
+              <SettingsMenu />
             </div>
           </div>
         </div>
@@ -403,7 +383,7 @@ BREAD001,White Bread,Soft white sandwich bread,Bakery,2.99,3,C,25,t,https://imag
           </div>
 
           <TabsContent value="dashboard" className="space-y-6">
-            <Dashboard onNavigateToTab={handleNavigateToTab} storeId={1} />
+            <Dashboard onNavigateToTab={handleNavigateToTab} storeId={currentStoreId || 1} chainId={currentChainId || 1} />
           </TabsContent>
 
           <TabsContent value="products" className="space-y-6">
@@ -740,7 +720,7 @@ BREAD001,White Bread,Soft white sandwich bread,Bakery,2.99,3,C,25,t,https://imag
           </TabsContent>
 
           <TabsContent value="map" className="space-y-6">
-            <MapEditor storeId={1} onSave={fetchProducts} />
+            <MapEditor storeId={currentStoreId || 1} onSave={fetchProducts} />
           </TabsContent>
         </Tabs>
       </div>

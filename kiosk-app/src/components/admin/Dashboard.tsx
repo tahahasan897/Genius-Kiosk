@@ -10,18 +10,26 @@ import { RefreshCw } from 'lucide-react';
 interface DashboardProps {
   onNavigateToTab: (tab: string) => void;
   storeId?: number;
+  chainId?: number;
 }
 
-const Dashboard = ({ onNavigateToTab, storeId = 1 }: DashboardProps) => {
+const Dashboard = ({ onNavigateToTab, storeId = 1, chainId = 1 }: DashboardProps) => {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [previewCompleted, setPreviewCompleted] = useState(false);
+  const [gettingStartedDismissed, setGettingStartedDismissed] = useState(false);
 
-  // Check localStorage for preview completion
+  // Check localStorage for preview completion and getting started dismissal (per chain, not per store)
   useEffect(() => {
-    setPreviewCompleted(localStorage.getItem('kioskPreviewCompleted') === 'true');
-  }, []);
+    setPreviewCompleted(localStorage.getItem(`kioskPreviewCompleted_${chainId}`) === 'true');
+    setGettingStartedDismissed(localStorage.getItem(`gettingStartedDismissed_${chainId}`) === 'true');
+  }, [chainId]);
+
+  const handleDismissGettingStarted = () => {
+    localStorage.setItem(`gettingStartedDismissed_${chainId}`, 'true');
+    setGettingStartedDismissed(true);
+  };
 
   const fetchStats = async () => {
     setLoading(true);
@@ -97,7 +105,7 @@ const Dashboard = ({ onNavigateToTab, storeId = 1 }: DashboardProps) => {
       {/* Main Content Grid */}
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Left Column: Getting Started OR Analytics Summary */}
-        {isGettingStartedComplete ? (
+        {isGettingStartedComplete || gettingStartedDismissed ? (
           <AnalyticsSummary
             stats={stats}
             onNavigateToTab={onNavigateToTab}
@@ -108,6 +116,8 @@ const Dashboard = ({ onNavigateToTab, storeId = 1 }: DashboardProps) => {
             completedSteps={stats.gettingStarted.completedSteps}
             totalSteps={stats.gettingStarted.totalSteps}
             onNavigateToTab={onNavigateToTab}
+            onDismiss={handleDismissGettingStarted}
+            chainId={chainId}
           />
         )}
 
