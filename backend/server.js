@@ -7,6 +7,7 @@ import productRoutes from './routes/products.js';
 import storeRoutes from './routes/stores.js';
 import adminRoutes from './routes/admin.js';
 import authRoutes from './routes/auth.js';
+import superAdminRoutes from './routes/superadmin.js';
 
 dotenv.config();
 
@@ -29,6 +30,7 @@ app.use('/api/products', productRoutes);
 app.use('/api/stores', storeRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/auth', authRoutes);
+app.use('/api/super-admin', superAdminRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
