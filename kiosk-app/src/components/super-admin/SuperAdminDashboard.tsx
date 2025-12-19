@@ -54,7 +54,7 @@ const SuperAdminDashboard = ({ onNavigateToTab }: SuperAdminDashboardProps) => {
       <div className="flex items-center justify-center py-24">
         <div className="text-center space-y-4">
           <p className="text-red-400">Failed to load dashboard data</p>
-          <Button onClick={fetchStats} variant="outline" className="border-slate-600 text-slate-300 hover:bg-slate-700">
+          <Button onClick={fetchStats} variant="outline" className="border-gray-600 text-slate-300 hover:bg-gray-800">
             Try again
           </Button>
         </div>
@@ -74,16 +74,16 @@ const SuperAdminDashboard = ({ onNavigateToTab }: SuperAdminDashboardProps) => {
     <div className="space-y-6">
       {/* Stats Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <Card className="bg-slate-800 border-slate-700">
+        <Card className="bg-gray-900 border-gray-700">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium text-slate-400">Total Chains</CardTitle>
-            <Building2 className="h-4 w-4 text-amber-500" />
+            <Building2 className="h-4 w-4 text-blue-500" />
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold text-slate-100">{stats.stats.totalChains}</div>
             <Button
               variant="link"
-              className="p-0 h-auto text-xs text-amber-500 hover:text-amber-400"
+              className="p-0 h-auto text-xs text-blue-500 hover:text-blue-400"
               onClick={() => onNavigateToTab('chains')}
             >
               View all chains
@@ -92,16 +92,16 @@ const SuperAdminDashboard = ({ onNavigateToTab }: SuperAdminDashboardProps) => {
           </CardContent>
         </Card>
 
-        <Card className="bg-slate-800 border-slate-700">
+        <Card className="bg-gray-900 border-gray-700">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium text-slate-400">Total Stores</CardTitle>
-            <Store className="h-4 w-4 text-amber-500" />
+            <Store className="h-4 w-4 text-blue-500" />
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold text-slate-100">{stats.stats.totalStores}</div>
             <Button
               variant="link"
-              className="p-0 h-auto text-xs text-amber-500 hover:text-amber-400"
+              className="p-0 h-auto text-xs text-blue-500 hover:text-blue-400"
               onClick={() => onNavigateToTab('stores')}
             >
               View all stores
@@ -110,10 +110,10 @@ const SuperAdminDashboard = ({ onNavigateToTab }: SuperAdminDashboardProps) => {
           </CardContent>
         </Card>
 
-        <Card className="bg-slate-800 border-slate-700">
+        <Card className="bg-gray-900 border-gray-700">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium text-slate-400">Total Products</CardTitle>
-            <Package className="h-4 w-4 text-amber-500" />
+            <Package className="h-4 w-4 text-blue-500" />
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold text-slate-100">{stats.stats.totalProducts}</div>
@@ -121,16 +121,16 @@ const SuperAdminDashboard = ({ onNavigateToTab }: SuperAdminDashboardProps) => {
           </CardContent>
         </Card>
 
-        <Card className="bg-slate-800 border-slate-700">
+        <Card className="bg-gray-900 border-gray-700">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium text-slate-400">Admin Users</CardTitle>
-            <Users className="h-4 w-4 text-amber-500" />
+            <Users className="h-4 w-4 text-blue-500" />
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold text-slate-100">{stats.stats.totalAdmins}</div>
             <Button
               variant="link"
-              className="p-0 h-auto text-xs text-amber-500 hover:text-amber-400"
+              className="p-0 h-auto text-xs text-blue-500 hover:text-blue-400"
               onClick={() => onNavigateToTab('admins')}
             >
               Manage admins
@@ -143,7 +143,7 @@ const SuperAdminDashboard = ({ onNavigateToTab }: SuperAdminDashboardProps) => {
       {/* Recent Activity Grid */}
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Top Chains */}
-        <Card className="bg-slate-800 border-slate-700">
+        <Card className="bg-gray-900 border-gray-700">
           <CardHeader>
             <CardTitle className="text-lg text-slate-100">Top Chains by Store Count</CardTitle>
           </CardHeader>
@@ -155,10 +155,10 @@ const SuperAdminDashboard = ({ onNavigateToTab }: SuperAdminDashboardProps) => {
                 {stats.topChains.map((chain, index) => (
                   <div
                     key={chain.chain_id}
-                    className="flex items-center justify-between p-3 rounded-lg bg-slate-700/50"
+                    className="flex items-center justify-between p-3 rounded-lg bg-gray-800/50"
                   >
                     <div className="flex items-center gap-3">
-                      <div className="h-8 w-8 rounded-full bg-amber-500/20 flex items-center justify-center text-amber-500 text-sm font-bold">
+                      <div className="h-8 w-8 rounded-full bg-blue-500/20 flex items-center justify-center text-blue-500 text-sm font-bold">
                         {index + 1}
                       </div>
                       <span className="font-medium text-slate-200">{chain.chain_name}</span>
@@ -174,7 +174,7 @@ const SuperAdminDashboard = ({ onNavigateToTab }: SuperAdminDashboardProps) => {
         </Card>
 
         {/* Recent Chains */}
-        <Card className="bg-slate-800 border-slate-700">
+        <Card className="bg-gray-900 border-gray-700">
           <CardHeader>
             <CardTitle className="text-lg text-slate-100">Recently Added Chains</CardTitle>
           </CardHeader>
@@ -186,7 +186,7 @@ const SuperAdminDashboard = ({ onNavigateToTab }: SuperAdminDashboardProps) => {
                 <Button
                   variant="outline"
                   size="sm"
-                  className="mt-3 border-slate-600 text-slate-300 hover:bg-slate-700"
+                  className="mt-3 border-gray-600 text-slate-300 hover:bg-gray-800"
                   onClick={() => onNavigateToTab('chains')}
                 >
                   Add your first chain
@@ -197,10 +197,10 @@ const SuperAdminDashboard = ({ onNavigateToTab }: SuperAdminDashboardProps) => {
                 {stats.recentChains.map((chain) => (
                   <div
                     key={chain.chain_id}
-                    className="flex items-center justify-between p-3 rounded-lg bg-slate-700/50"
+                    className="flex items-center justify-between p-3 rounded-lg bg-gray-800/50"
                   >
                     <div className="flex items-center gap-3">
-                      <Building2 className="h-5 w-5 text-amber-500" />
+                      <Building2 className="h-5 w-5 text-blue-500" />
                       <span className="font-medium text-slate-200">{chain.chain_name}</span>
                     </div>
                     <div className="flex items-center gap-1 text-xs text-slate-500">
@@ -215,7 +215,7 @@ const SuperAdminDashboard = ({ onNavigateToTab }: SuperAdminDashboardProps) => {
         </Card>
 
         {/* Recent Stores */}
-        <Card className="bg-slate-800 border-slate-700 lg:col-span-2">
+        <Card className="bg-gray-900 border-gray-700 lg:col-span-2">
           <CardHeader>
             <CardTitle className="text-lg text-slate-100">Recently Added Stores</CardTitle>
           </CardHeader>
@@ -227,7 +227,7 @@ const SuperAdminDashboard = ({ onNavigateToTab }: SuperAdminDashboardProps) => {
                 <Button
                   variant="outline"
                   size="sm"
-                  className="mt-3 border-slate-600 text-slate-300 hover:bg-slate-700"
+                  className="mt-3 border-gray-600 text-slate-300 hover:bg-gray-800"
                   onClick={() => onNavigateToTab('stores')}
                 >
                   Add your first store
@@ -238,14 +238,14 @@ const SuperAdminDashboard = ({ onNavigateToTab }: SuperAdminDashboardProps) => {
                 {stats.recentStores.map((store) => (
                   <div
                     key={store.store_id}
-                    className="p-3 rounded-lg bg-slate-700/50"
+                    className="p-3 rounded-lg bg-gray-800/50"
                   >
                     <div className="flex items-start justify-between">
                       <div>
                         <p className="font-medium text-slate-200">{store.store_name}</p>
                         <p className="text-xs text-slate-500">{store.chain_name}</p>
                       </div>
-                      <Store className="h-4 w-4 text-amber-500" />
+                      <Store className="h-4 w-4 text-blue-500" />
                     </div>
                     <div className="flex items-center gap-1 text-xs text-slate-500 mt-2">
                       <Clock className="h-3 w-3" />
@@ -260,7 +260,7 @@ const SuperAdminDashboard = ({ onNavigateToTab }: SuperAdminDashboardProps) => {
       </div>
 
       {/* Quick Actions */}
-      <Card className="bg-slate-800 border-slate-700">
+      <Card className="bg-gray-900 border-gray-700">
         <CardHeader>
           <CardTitle className="text-lg text-slate-100">Quick Actions</CardTitle>
         </CardHeader>
@@ -268,7 +268,7 @@ const SuperAdminDashboard = ({ onNavigateToTab }: SuperAdminDashboardProps) => {
           <div className="flex flex-wrap gap-3">
             <Button
               variant="outline"
-              className="border-amber-500/50 text-amber-500 hover:bg-amber-500/10"
+              className="border-blue-500/50 text-blue-500 hover:bg-blue-500/10"
               onClick={() => onNavigateToTab('chains')}
             >
               <Building2 className="h-4 w-4 mr-2" />
@@ -276,7 +276,7 @@ const SuperAdminDashboard = ({ onNavigateToTab }: SuperAdminDashboardProps) => {
             </Button>
             <Button
               variant="outline"
-              className="border-amber-500/50 text-amber-500 hover:bg-amber-500/10"
+              className="border-blue-500/50 text-blue-500 hover:bg-blue-500/10"
               onClick={() => onNavigateToTab('stores')}
             >
               <Store className="h-4 w-4 mr-2" />
@@ -284,7 +284,7 @@ const SuperAdminDashboard = ({ onNavigateToTab }: SuperAdminDashboardProps) => {
             </Button>
             <Button
               variant="outline"
-              className="border-amber-500/50 text-amber-500 hover:bg-amber-500/10"
+              className="border-blue-500/50 text-blue-500 hover:bg-blue-500/10"
               onClick={() => onNavigateToTab('admins')}
             >
               <Users className="h-4 w-4 mr-2" />

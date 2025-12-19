@@ -11,6 +11,7 @@ const getAuthHeaders = async () => {
   }
   return {
     'x-firebase-uid': user.uid,
+    'x-firebase-email': user.email || '',
   };
 };
 
@@ -298,5 +299,45 @@ export const updateAdminUser = async (
 export const deleteAdminUser = async (userId: number): Promise<{ success: boolean; message: string; admin: AdminUser }> => {
   const headers = await getAuthHeaders();
   const response = await axios.delete(`${API_URL}/api/super-admin/admins/${userId}`, { headers });
+  return response.data;
+};
+
+// ============================================
+// ADMIN INVITES
+// ============================================
+
+export interface AdminInvite {
+  invite_id: number;
+  email: string;
+  is_super_admin: boolean;
+  chain_id: number | null;
+  chain_name?: string | null;
+  invited_by_email?: string | null;
+  created_at: string;
+  accepted_at: string | null;
+}
+
+export const getAdminInvites = async (status?: 'pending' | 'accepted' | 'all'): Promise<{ invites: AdminInvite[] }> => {
+  const headers = await getAuthHeaders();
+  const response = await axios.get(`${API_URL}/api/super-admin/invites`, {
+    headers,
+    params: { status: status || 'all' },
+  });
+  return response.data;
+};
+
+export const createAdminInvite = async (data: {
+  email: string;
+  is_super_admin?: boolean;
+  chain_id?: number;
+}): Promise<AdminInvite> => {
+  const headers = await getAuthHeaders();
+  const response = await axios.post(`${API_URL}/api/super-admin/invites`, data, { headers });
+  return response.data;
+};
+
+export const deleteAdminInvite = async (inviteId: number): Promise<{ success: boolean; message: string; invite: AdminInvite }> => {
+  const headers = await getAuthHeaders();
+  const response = await axios.delete(`${API_URL}/api/super-admin/invites/${inviteId}`, { headers });
   return response.data;
 };

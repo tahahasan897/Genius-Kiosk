@@ -183,7 +183,7 @@ const ChainManagement = () => {
             setFormData({ chain_name: '' });
             setShowCreateDialog(true);
           }}
-          className="bg-amber-500 hover:bg-amber-600 text-slate-900"
+          className="bg-blue-500 hover:bg-blue-600 text-white"
         >
           <Plus className="h-4 w-4 mr-2" />
           Add Chain
@@ -191,7 +191,7 @@ const ChainManagement = () => {
       </div>
 
       {/* Filters */}
-      <Card className="bg-slate-800 border-slate-700">
+      <Card className="bg-gray-900 border-gray-700">
         <CardContent className="p-4">
           <div className="flex flex-col sm:flex-row gap-4">
             <div className="flex-1 relative">
@@ -200,7 +200,7 @@ const ChainManagement = () => {
                 placeholder="Search chains..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-10 bg-slate-700 border-slate-600 text-slate-100 placeholder:text-slate-500"
+                className="pl-10 bg-gray-800 border-gray-600 text-slate-100 placeholder:text-slate-500"
               />
             </div>
             <div className="flex items-center gap-2">
@@ -208,7 +208,7 @@ const ChainManagement = () => {
                 id="show-inactive"
                 checked={showInactive}
                 onCheckedChange={(checked) => setShowInactive(checked as boolean)}
-                className="border-slate-600 data-[state=checked]:bg-amber-500 data-[state=checked]:border-amber-500"
+                className="border-gray-600 data-[state=checked]:bg-blue-500 data-[state=checked]:border-blue-500"
               />
               <Label htmlFor="show-inactive" className="text-slate-400 text-sm cursor-pointer">
                 Show inactive chains
@@ -219,7 +219,7 @@ const ChainManagement = () => {
       </Card>
 
       {/* Chains Table */}
-      <Card className="bg-slate-800 border-slate-700">
+      <Card className="bg-gray-900 border-gray-700">
         <CardContent className="p-0">
           {loading ? (
             <div className="flex items-center justify-center py-12">
@@ -232,7 +232,7 @@ const ChainManagement = () => {
               <Button
                 onClick={() => setShowCreateDialog(true)}
                 variant="outline"
-                className="mt-4 border-slate-600 text-slate-300 hover:bg-slate-700"
+                className="mt-4 border-gray-600 text-slate-300 hover:bg-gray-800"
               >
                 Add your first chain
               </Button>
@@ -240,7 +240,7 @@ const ChainManagement = () => {
           ) : (
             <Table>
               <TableHeader>
-                <TableRow className="border-slate-700 hover:bg-transparent">
+                <TableRow className="border-gray-700 hover:bg-transparent">
                   <TableHead className="text-slate-400">Chain Name</TableHead>
                   <TableHead className="text-slate-400">Stores</TableHead>
                   <TableHead className="text-slate-400">Products</TableHead>
@@ -253,11 +253,11 @@ const ChainManagement = () => {
                 {chains.map((chain) => (
                   <TableRow
                     key={chain.chain_id}
-                    className="border-slate-700 hover:bg-slate-700/50"
+                    className="border-gray-700 hover:bg-gray-800/50"
                   >
                     <TableCell className="font-medium text-slate-200">
                       <div className="flex items-center gap-2">
-                        <Building2 className="h-4 w-4 text-amber-500" />
+                        <Building2 className="h-4 w-4 text-blue-500" />
                         {chain.chain_name}
                       </div>
                     </TableCell>
@@ -293,18 +293,18 @@ const ChainManagement = () => {
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="text-slate-400 hover:text-slate-100 hover:bg-slate-700"
+                            className="text-slate-400 hover:text-slate-100 hover:bg-gray-800"
                           >
                             <MoreHorizontal className="h-4 w-4" />
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent
                           align="end"
-                          className="bg-slate-800 border-slate-700 text-slate-100"
+                          className="bg-gray-900 border-gray-700 text-slate-100"
                         >
                           <DropdownMenuItem
                             onClick={() => openEditDialog(chain)}
-                            className="hover:bg-slate-700 cursor-pointer"
+                            className="hover:bg-gray-800 cursor-pointer"
                           >
                             <Pencil className="h-4 w-4 mr-2" />
                             Edit
@@ -312,7 +312,7 @@ const ChainManagement = () => {
                           {chain.is_active ? (
                             <DropdownMenuItem
                               onClick={() => openDeleteDialog(chain)}
-                              className="text-red-400 hover:text-red-300 hover:bg-slate-700 cursor-pointer"
+                              className="text-red-400 hover:text-red-300 hover:bg-gray-800 cursor-pointer"
                             >
                               <Trash2 className="h-4 w-4 mr-2" />
                               Deactivate
@@ -320,7 +320,7 @@ const ChainManagement = () => {
                           ) : (
                             <DropdownMenuItem
                               onClick={() => handleRestore(chain)}
-                              className="text-green-400 hover:text-green-300 hover:bg-slate-700 cursor-pointer"
+                              className="text-green-400 hover:text-green-300 hover:bg-gray-800 cursor-pointer"
                             >
                               <RotateCcw className="h-4 w-4 mr-2" />
                               Restore
@@ -339,7 +339,7 @@ const ChainManagement = () => {
 
       {/* Create Dialog */}
       <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-        <DialogContent className="bg-slate-800 border-slate-700 text-slate-100">
+        <DialogContent className="bg-gray-900 border-gray-700 text-slate-100">
           <DialogHeader>
             <DialogTitle>Add New Chain</DialogTitle>
             <DialogDescription className="text-slate-400">
@@ -354,7 +354,7 @@ const ChainManagement = () => {
                 placeholder="e.g., Walmart, Target, Kroger"
                 value={formData.chain_name}
                 onChange={(e) => setFormData({ chain_name: e.target.value })}
-                className="bg-slate-700 border-slate-600 text-slate-100 placeholder:text-slate-500"
+                className="bg-gray-800 border-gray-600 text-slate-100 placeholder:text-slate-500"
                 disabled={submitting}
               />
             </div>
@@ -364,14 +364,14 @@ const ChainManagement = () => {
               variant="outline"
               onClick={() => setShowCreateDialog(false)}
               disabled={submitting}
-              className="border-slate-600 text-slate-300 hover:bg-slate-700"
+              className="border-gray-600 text-slate-300 hover:bg-gray-800"
             >
               Cancel
             </Button>
             <Button
               onClick={handleCreate}
               disabled={submitting}
-              className="bg-amber-500 hover:bg-amber-600 text-slate-900"
+              className="bg-blue-500 hover:bg-blue-600 text-white"
             >
               {submitting ? (
                 <>
@@ -388,7 +388,7 @@ const ChainManagement = () => {
 
       {/* Edit Dialog */}
       <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
-        <DialogContent className="bg-slate-800 border-slate-700 text-slate-100">
+        <DialogContent className="bg-gray-900 border-gray-700 text-slate-100">
           <DialogHeader>
             <DialogTitle>Edit Chain</DialogTitle>
             <DialogDescription className="text-slate-400">
@@ -402,7 +402,7 @@ const ChainManagement = () => {
                 id="edit-chain-name"
                 value={formData.chain_name}
                 onChange={(e) => setFormData({ chain_name: e.target.value })}
-                className="bg-slate-700 border-slate-600 text-slate-100"
+                className="bg-gray-800 border-gray-600 text-slate-100"
                 disabled={submitting}
               />
             </div>
@@ -412,14 +412,14 @@ const ChainManagement = () => {
               variant="outline"
               onClick={() => setShowEditDialog(false)}
               disabled={submitting}
-              className="border-slate-600 text-slate-300 hover:bg-slate-700"
+              className="border-gray-600 text-slate-300 hover:bg-gray-800"
             >
               Cancel
             </Button>
             <Button
               onClick={handleUpdate}
               disabled={submitting}
-              className="bg-amber-500 hover:bg-amber-600 text-slate-900"
+              className="bg-blue-500 hover:bg-blue-600 text-white"
             >
               {submitting ? (
                 <>
@@ -436,7 +436,7 @@ const ChainManagement = () => {
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
-        <DialogContent className="bg-slate-800 border-slate-700 text-slate-100">
+        <DialogContent className="bg-gray-900 border-gray-700 text-slate-100">
           <DialogHeader>
             <DialogTitle>Deactivate Chain</DialogTitle>
             <DialogDescription className="text-slate-400">
@@ -449,7 +449,7 @@ const ChainManagement = () => {
               variant="outline"
               onClick={() => setShowDeleteDialog(false)}
               disabled={submitting}
-              className="border-slate-600 text-slate-300 hover:bg-slate-700"
+              className="border-gray-600 text-slate-300 hover:bg-gray-800"
             >
               Cancel
             </Button>

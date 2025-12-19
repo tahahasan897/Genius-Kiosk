@@ -253,7 +253,7 @@ const StoreManagement = () => {
             setFormData(emptyFormData);
             setShowCreateDialog(true);
           }}
-          className="bg-amber-500 hover:bg-amber-600 text-slate-900"
+          className="bg-blue-500 hover:bg-blue-600 text-white"
           disabled={chains.length === 0}
         >
           <Plus className="h-4 w-4 mr-2" />
@@ -262,7 +262,7 @@ const StoreManagement = () => {
       </div>
 
       {/* Filters */}
-      <Card className="bg-slate-800 border-slate-700">
+      <Card className="bg-gray-900 border-gray-700">
         <CardContent className="p-4">
           <div className="flex flex-col lg:flex-row gap-4">
             <div className="flex-1 relative">
@@ -271,14 +271,14 @@ const StoreManagement = () => {
                 placeholder="Search stores..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-10 bg-slate-700 border-slate-600 text-slate-100 placeholder:text-slate-500"
+                className="pl-10 bg-gray-800 border-gray-600 text-slate-100 placeholder:text-slate-500"
               />
             </div>
             <Select value={selectedChainFilter} onValueChange={setSelectedChainFilter}>
-              <SelectTrigger className="w-full lg:w-[200px] bg-slate-700 border-slate-600 text-slate-100">
+              <SelectTrigger className="w-full lg:w-[200px] bg-gray-800 border-gray-600 text-slate-100">
                 <SelectValue placeholder="Filter by chain" />
               </SelectTrigger>
-              <SelectContent className="bg-slate-800 border-slate-700 text-slate-100">
+              <SelectContent className="bg-gray-900 border-gray-700 text-slate-100">
                 <SelectItem value="all">All Chains</SelectItem>
                 {chains.map((chain) => (
                   <SelectItem key={chain.chain_id} value={chain.chain_id.toString()}>
@@ -292,7 +292,7 @@ const StoreManagement = () => {
                 id="show-inactive-stores"
                 checked={showInactive}
                 onCheckedChange={(checked) => setShowInactive(checked as boolean)}
-                className="border-slate-600 data-[state=checked]:bg-amber-500 data-[state=checked]:border-amber-500"
+                className="border-gray-600 data-[state=checked]:bg-blue-500 data-[state=checked]:border-blue-500"
               />
               <Label htmlFor="show-inactive-stores" className="text-slate-400 text-sm cursor-pointer">
                 Show inactive
@@ -303,7 +303,7 @@ const StoreManagement = () => {
       </Card>
 
       {/* Stores Table */}
-      <Card className="bg-slate-800 border-slate-700">
+      <Card className="bg-gray-900 border-gray-700">
         <CardContent className="p-0">
           {loading ? (
             <div className="flex items-center justify-center py-12">
@@ -321,7 +321,7 @@ const StoreManagement = () => {
                 <Button
                   onClick={() => setShowCreateDialog(true)}
                   variant="outline"
-                  className="mt-4 border-slate-600 text-slate-300 hover:bg-slate-700"
+                  className="mt-4 border-gray-600 text-slate-300 hover:bg-gray-800"
                 >
                   Add your first store
                 </Button>
@@ -330,7 +330,7 @@ const StoreManagement = () => {
           ) : (
             <Table>
               <TableHeader>
-                <TableRow className="border-slate-700 hover:bg-transparent">
+                <TableRow className="border-gray-700 hover:bg-transparent">
                   <TableHead className="text-slate-400">Store Name</TableHead>
                   <TableHead className="text-slate-400">Chain</TableHead>
                   <TableHead className="text-slate-400">Location</TableHead>
@@ -344,11 +344,11 @@ const StoreManagement = () => {
                 {stores.map((store) => (
                   <TableRow
                     key={store.store_id}
-                    className="border-slate-700 hover:bg-slate-700/50"
+                    className="border-gray-700 hover:bg-gray-800/50"
                   >
                     <TableCell className="font-medium text-slate-200">
                       <div className="flex items-center gap-2">
-                        <StoreIcon className="h-4 w-4 text-amber-500" />
+                        <StoreIcon className="h-4 w-4 text-blue-500" />
                         {store.store_name}
                       </div>
                     </TableCell>
@@ -396,18 +396,18 @@ const StoreManagement = () => {
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="text-slate-400 hover:text-slate-100 hover:bg-slate-700"
+                            className="text-slate-400 hover:text-slate-100 hover:bg-gray-800"
                           >
                             <MoreHorizontal className="h-4 w-4" />
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent
                           align="end"
-                          className="bg-slate-800 border-slate-700 text-slate-100"
+                          className="bg-gray-900 border-gray-700 text-slate-100"
                         >
                           <DropdownMenuItem
                             onClick={() => openEditDialog(store)}
-                            className="hover:bg-slate-700 cursor-pointer"
+                            className="hover:bg-gray-800 cursor-pointer"
                           >
                             <Pencil className="h-4 w-4 mr-2" />
                             Edit
@@ -415,7 +415,7 @@ const StoreManagement = () => {
                           {store.is_active ? (
                             <DropdownMenuItem
                               onClick={() => openDeleteDialog(store)}
-                              className="text-red-400 hover:text-red-300 hover:bg-slate-700 cursor-pointer"
+                              className="text-red-400 hover:text-red-300 hover:bg-gray-800 cursor-pointer"
                             >
                               <Trash2 className="h-4 w-4 mr-2" />
                               Deactivate
@@ -423,7 +423,7 @@ const StoreManagement = () => {
                           ) : (
                             <DropdownMenuItem
                               onClick={() => handleRestore(store)}
-                              className="text-green-400 hover:text-green-300 hover:bg-slate-700 cursor-pointer"
+                              className="text-green-400 hover:text-green-300 hover:bg-gray-800 cursor-pointer"
                             >
                               <RotateCcw className="h-4 w-4 mr-2" />
                               Restore
@@ -442,7 +442,7 @@ const StoreManagement = () => {
 
       {/* Create Dialog */}
       <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-        <DialogContent className="bg-slate-800 border-slate-700 text-slate-100 max-w-md">
+        <DialogContent className="bg-gray-900 border-gray-700 text-slate-100 max-w-md">
           <DialogHeader>
             <DialogTitle>Add New Store</DialogTitle>
             <DialogDescription className="text-slate-400">
@@ -456,10 +456,10 @@ const StoreManagement = () => {
                 value={formData.chain_id}
                 onValueChange={(value) => setFormData({ ...formData, chain_id: value })}
               >
-                <SelectTrigger className="bg-slate-700 border-slate-600 text-slate-100">
+                <SelectTrigger className="bg-gray-800 border-gray-600 text-slate-100">
                   <SelectValue placeholder="Select a chain" />
                 </SelectTrigger>
-                <SelectContent className="bg-slate-800 border-slate-700 text-slate-100">
+                <SelectContent className="bg-gray-900 border-gray-700 text-slate-100">
                   {chains.map((chain) => (
                     <SelectItem key={chain.chain_id} value={chain.chain_id.toString()}>
                       {chain.chain_name}
@@ -474,7 +474,7 @@ const StoreManagement = () => {
                 placeholder="e.g., Downtown Branch, Mall Location"
                 value={formData.store_name}
                 onChange={(e) => setFormData({ ...formData, store_name: e.target.value })}
-                className="bg-slate-700 border-slate-600 text-slate-100 placeholder:text-slate-500"
+                className="bg-gray-800 border-gray-600 text-slate-100 placeholder:text-slate-500"
                 disabled={submitting}
               />
             </div>
@@ -484,7 +484,7 @@ const StoreManagement = () => {
                 placeholder="123 Main Street"
                 value={formData.address}
                 onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-                className="bg-slate-700 border-slate-600 text-slate-100 placeholder:text-slate-500"
+                className="bg-gray-800 border-gray-600 text-slate-100 placeholder:text-slate-500"
                 disabled={submitting}
               />
             </div>
@@ -495,7 +495,7 @@ const StoreManagement = () => {
                   placeholder="City"
                   value={formData.city}
                   onChange={(e) => setFormData({ ...formData, city: e.target.value })}
-                  className="bg-slate-700 border-slate-600 text-slate-100 placeholder:text-slate-500"
+                  className="bg-gray-800 border-gray-600 text-slate-100 placeholder:text-slate-500"
                   disabled={submitting}
                 />
               </div>
@@ -505,7 +505,7 @@ const StoreManagement = () => {
                   placeholder="State"
                   value={formData.state}
                   onChange={(e) => setFormData({ ...formData, state: e.target.value })}
-                  className="bg-slate-700 border-slate-600 text-slate-100 placeholder:text-slate-500"
+                  className="bg-gray-800 border-gray-600 text-slate-100 placeholder:text-slate-500"
                   disabled={submitting}
                 />
               </div>
@@ -517,7 +517,7 @@ const StoreManagement = () => {
                   placeholder="12345"
                   value={formData.zip_code}
                   onChange={(e) => setFormData({ ...formData, zip_code: e.target.value })}
-                  className="bg-slate-700 border-slate-600 text-slate-100 placeholder:text-slate-500"
+                  className="bg-gray-800 border-gray-600 text-slate-100 placeholder:text-slate-500"
                   disabled={submitting}
                 />
               </div>
@@ -527,7 +527,7 @@ const StoreManagement = () => {
                   placeholder="(555) 123-4567"
                   value={formData.phone}
                   onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                  className="bg-slate-700 border-slate-600 text-slate-100 placeholder:text-slate-500"
+                  className="bg-gray-800 border-gray-600 text-slate-100 placeholder:text-slate-500"
                   disabled={submitting}
                 />
               </div>
@@ -538,14 +538,14 @@ const StoreManagement = () => {
               variant="outline"
               onClick={() => setShowCreateDialog(false)}
               disabled={submitting}
-              className="border-slate-600 text-slate-300 hover:bg-slate-700"
+              className="border-gray-600 text-slate-300 hover:bg-gray-800"
             >
               Cancel
             </Button>
             <Button
               onClick={handleCreate}
               disabled={submitting}
-              className="bg-amber-500 hover:bg-amber-600 text-slate-900"
+              className="bg-blue-500 hover:bg-blue-600 text-white"
             >
               {submitting ? (
                 <>
@@ -562,7 +562,7 @@ const StoreManagement = () => {
 
       {/* Edit Dialog */}
       <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
-        <DialogContent className="bg-slate-800 border-slate-700 text-slate-100 max-w-md">
+        <DialogContent className="bg-gray-900 border-gray-700 text-slate-100 max-w-md">
           <DialogHeader>
             <DialogTitle>Edit Store</DialogTitle>
             <DialogDescription className="text-slate-400">
@@ -576,10 +576,10 @@ const StoreManagement = () => {
                 value={formData.chain_id}
                 onValueChange={(value) => setFormData({ ...formData, chain_id: value })}
               >
-                <SelectTrigger className="bg-slate-700 border-slate-600 text-slate-100">
+                <SelectTrigger className="bg-gray-800 border-gray-600 text-slate-100">
                   <SelectValue placeholder="Select a chain" />
                 </SelectTrigger>
-                <SelectContent className="bg-slate-800 border-slate-700 text-slate-100">
+                <SelectContent className="bg-gray-900 border-gray-700 text-slate-100">
                   {chains.map((chain) => (
                     <SelectItem key={chain.chain_id} value={chain.chain_id.toString()}>
                       {chain.chain_name}
@@ -593,7 +593,7 @@ const StoreManagement = () => {
               <Input
                 value={formData.store_name}
                 onChange={(e) => setFormData({ ...formData, store_name: e.target.value })}
-                className="bg-slate-700 border-slate-600 text-slate-100"
+                className="bg-gray-800 border-gray-600 text-slate-100"
                 disabled={submitting}
               />
             </div>
@@ -602,7 +602,7 @@ const StoreManagement = () => {
               <Input
                 value={formData.address}
                 onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-                className="bg-slate-700 border-slate-600 text-slate-100"
+                className="bg-gray-800 border-gray-600 text-slate-100"
                 disabled={submitting}
               />
             </div>
@@ -612,7 +612,7 @@ const StoreManagement = () => {
                 <Input
                   value={formData.city}
                   onChange={(e) => setFormData({ ...formData, city: e.target.value })}
-                  className="bg-slate-700 border-slate-600 text-slate-100"
+                  className="bg-gray-800 border-gray-600 text-slate-100"
                   disabled={submitting}
                 />
               </div>
@@ -621,7 +621,7 @@ const StoreManagement = () => {
                 <Input
                   value={formData.state}
                   onChange={(e) => setFormData({ ...formData, state: e.target.value })}
-                  className="bg-slate-700 border-slate-600 text-slate-100"
+                  className="bg-gray-800 border-gray-600 text-slate-100"
                   disabled={submitting}
                 />
               </div>
@@ -632,7 +632,7 @@ const StoreManagement = () => {
                 <Input
                   value={formData.zip_code}
                   onChange={(e) => setFormData({ ...formData, zip_code: e.target.value })}
-                  className="bg-slate-700 border-slate-600 text-slate-100"
+                  className="bg-gray-800 border-gray-600 text-slate-100"
                   disabled={submitting}
                 />
               </div>
@@ -641,7 +641,7 @@ const StoreManagement = () => {
                 <Input
                   value={formData.phone}
                   onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                  className="bg-slate-700 border-slate-600 text-slate-100"
+                  className="bg-gray-800 border-gray-600 text-slate-100"
                   disabled={submitting}
                 />
               </div>
@@ -652,14 +652,14 @@ const StoreManagement = () => {
               variant="outline"
               onClick={() => setShowEditDialog(false)}
               disabled={submitting}
-              className="border-slate-600 text-slate-300 hover:bg-slate-700"
+              className="border-gray-600 text-slate-300 hover:bg-gray-800"
             >
               Cancel
             </Button>
             <Button
               onClick={handleUpdate}
               disabled={submitting}
-              className="bg-amber-500 hover:bg-amber-600 text-slate-900"
+              className="bg-blue-500 hover:bg-blue-600 text-white"
             >
               {submitting ? (
                 <>
@@ -676,7 +676,7 @@ const StoreManagement = () => {
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
-        <DialogContent className="bg-slate-800 border-slate-700 text-slate-100">
+        <DialogContent className="bg-gray-900 border-gray-700 text-slate-100">
           <DialogHeader>
             <DialogTitle>Deactivate Store</DialogTitle>
             <DialogDescription className="text-slate-400">
@@ -689,7 +689,7 @@ const StoreManagement = () => {
               variant="outline"
               onClick={() => setShowDeleteDialog(false)}
               disabled={submitting}
-              className="border-slate-600 text-slate-300 hover:bg-slate-700"
+              className="border-gray-600 text-slate-300 hover:bg-gray-800"
             >
               Cancel
             </Button>

@@ -49,35 +49,101 @@ const requireSuperAdmin = async (req, res, next) => {
 
 // ============================================
 // ADMIN USER CHECK (No auth required - used to check role)
+// Also handles bootstrap and invite auto-promotion
 // ============================================
 
 router.get('/me', async (req, res) => {
   try {
     const firebaseUid = req.headers['x-firebase-uid'];
+    const userEmail = req.headers['x-firebase-email'];
 
     if (!firebaseUid) {
       return res.json({ isAdmin: false, isSuperAdmin: false });
     }
 
-    const result = await query(
+    // Check if user already exists as admin
+    const existingAdmin = await query(
       'SELECT user_id, email, display_name, is_super_admin, chain_id FROM admin_users WHERE firebase_uid = $1',
       [firebaseUid]
     );
 
-    if (result.rows.length === 0) {
-      return res.json({ isAdmin: false, isSuperAdmin: false });
+    if (existingAdmin.rows.length > 0) {
+      const adminUser = existingAdmin.rows[0];
+      return res.json({
+        isAdmin: true,
+        isSuperAdmin: adminUser.is_super_admin,
+        userId: adminUser.user_id,
+        email: adminUser.email,
+        displayName: adminUser.display_name,
+        chainId: adminUser.chain_id
+      });
     }
 
-    const adminUser = result.rows[0];
+    // User is not an admin yet - check for bootstrap or invite
+    if (userEmail) {
+      // BOOTSTRAP: Check if this is the bootstrap super admin email and no admins exist
+      const bootstrapEmail = process.env.BOOTSTRAP_SUPER_ADMIN_EMAIL;
+      if (bootstrapEmail && userEmail.toLowerCase() === bootstrapEmail.toLowerCase()) {
+        const adminCount = await query('SELECT COUNT(*) FROM admin_users');
+        if (parseInt(adminCount.rows[0].count) === 0) {
+          // Create the first super admin
+          const newAdmin = await query(
+            `INSERT INTO admin_users (firebase_uid, email, display_name, is_super_admin)
+             VALUES ($1, $2, $3, true)
+             RETURNING user_id, email, display_name, is_super_admin, chain_id`,
+            [firebaseUid, userEmail, 'Super Admin']
+          );
+          console.log(`✅ Bootstrap: Created first super admin for ${userEmail}`);
+          return res.json({
+            isAdmin: true,
+            isSuperAdmin: true,
+            userId: newAdmin.rows[0].user_id,
+            email: newAdmin.rows[0].email,
+            displayName: newAdmin.rows[0].display_name,
+            chainId: null,
+            bootstrapped: true
+          });
+        }
+      }
 
-    res.json({
-      isAdmin: true,
-      isSuperAdmin: adminUser.is_super_admin,
-      userId: adminUser.user_id,
-      email: adminUser.email,
-      displayName: adminUser.display_name,
-      chainId: adminUser.chain_id
-    });
+      // INVITE: Check if there's a pending invite for this email
+      const invite = await query(
+        'SELECT invite_id, email, is_super_admin, chain_id FROM admin_invites WHERE LOWER(email) = LOWER($1) AND accepted_at IS NULL',
+        [userEmail]
+      );
+
+      if (invite.rows.length > 0) {
+        const pendingInvite = invite.rows[0];
+
+        // Create the admin user from the invite
+        const newAdmin = await query(
+          `INSERT INTO admin_users (firebase_uid, email, display_name, is_super_admin, chain_id)
+           VALUES ($1, $2, $3, $4, $5)
+           RETURNING user_id, email, display_name, is_super_admin, chain_id`,
+          [firebaseUid, userEmail, null, pendingInvite.is_super_admin, pendingInvite.chain_id]
+        );
+
+        // Mark invite as accepted
+        await query(
+          'UPDATE admin_invites SET accepted_at = CURRENT_TIMESTAMP WHERE invite_id = $1',
+          [pendingInvite.invite_id]
+        );
+
+        console.log(`✅ Invite accepted: ${userEmail} is now an admin`);
+        return res.json({
+          isAdmin: true,
+          isSuperAdmin: newAdmin.rows[0].is_super_admin,
+          userId: newAdmin.rows[0].user_id,
+          email: newAdmin.rows[0].email,
+          displayName: newAdmin.rows[0].display_name,
+          chainId: newAdmin.rows[0].chain_id,
+          inviteAccepted: true
+        });
+      }
+    }
+
+    // No admin record, no bootstrap, no invite
+    return res.json({ isAdmin: false, isSuperAdmin: false });
   } catch (error) {
     console.error('Error checking admin status:', error);
     res.status(500).json({ error: 'Failed to check admin status' });
@@ -811,6 +877,130 @@ router.delete('/admins/:id', requireSuperAdmin, async (req, res) => {
   } catch (error) {
     console.error('Error deleting admin user:', error);
     res.status(500).json({ error: 'Failed to delete admin user', details: error.message });
+  }
+});
+
+// ============================================
+// ADMIN INVITES
+// ============================================
+
+// Get all invites (pending and accepted)
+router.get('/invites', requireSuperAdmin, async (req, res) => {
+  try {
+    const { status = 'all' } = req.query;
+
+    let whereClause = '';
+    if (status === 'pending') {
+      whereClause = 'WHERE ai.accepted_at IS NULL';
+    } else if (status === 'accepted') {
+      whereClause = 'WHERE ai.accepted_at IS NOT NULL';
+    }
+
+    const result = await query(
+      `SELECT
+        ai.invite_id,
+        ai.email,
+        ai.is_super_admin,
+        ai.chain_id,
+        ai.created_at,
+        ai.accepted_at,
+        c.chain_name,
+        inviter.email as invited_by_email
+       FROM admin_invites ai
+       LEFT JOIN chains c ON ai.chain_id = c.chain_id
+       LEFT JOIN admin_users inviter ON ai.invited_by = inviter.user_id
+       ${whereClause}
+       ORDER BY ai.created_at DESC`
+    );
+
+    res.json({ invites: result.rows });
+  } catch (error) {
+    console.error('Error fetching invites:', error);
+    res.status(500).json({ error: 'Failed to fetch invites', details: error.message });
+  }
+});
+
+// Create invite
+router.post('/invites', requireSuperAdmin, async (req, res) => {
+  try {
+    const { email, is_super_admin, chain_id } = req.body;
+
+    if (!email || !email.trim()) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+
+    // Check if email is already an admin
+    const existingAdmin = await query(
+      'SELECT user_id FROM admin_users WHERE LOWER(email) = $1',
+      [normalizedEmail]
+    );
+
+    if (existingAdmin.rows.length > 0) {
+      return res.status(400).json({ error: 'This email is already an admin' });
+    }
+
+    // Check if invite already exists
+    const existingInvite = await query(
+      'SELECT invite_id, accepted_at FROM admin_invites WHERE LOWER(email) = $1',
+      [normalizedEmail]
+    );
+
+    if (existingInvite.rows.length > 0) {
+      if (existingInvite.rows[0].accepted_at) {
+        return res.status(400).json({ error: 'This invite has already been accepted' });
+      }
+      return res.status(400).json({ error: 'An invite for this email already exists' });
+    }
+
+    // Validate chain_id if not super admin
+    if (!is_super_admin && chain_id) {
+      const chainCheck = await query(
+        'SELECT chain_id FROM chains WHERE chain_id = $1 AND is_active = true',
+        [chain_id]
+      );
+      if (chainCheck.rows.length === 0) {
+        return res.status(400).json({ error: 'Invalid or inactive chain' });
+      }
+    }
+
+    const result = await query(
+      `INSERT INTO admin_invites (email, is_super_admin, chain_id, invited_by)
+       VALUES ($1, $2, $3, $4)
+       RETURNING invite_id, email, is_super_admin, chain_id, created_at`,
+      [normalizedEmail, is_super_admin || false, is_super_admin ? null : (chain_id || null), req.adminUser.user_id]
+    );
+
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    console.error('Error creating invite:', error);
+    res.status(500).json({ error: 'Failed to create invite', details: error.message });
+  }
+});
+
+// Delete/cancel invite
+router.delete('/invites/:id', requireSuperAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await query(
+      'DELETE FROM admin_invites WHERE invite_id = $1 AND accepted_at IS NULL RETURNING invite_id, email',
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Invite not found or already accepted' });
+    }
+
+    res.json({
+      success: true,
+      message: 'Invite has been cancelled',
+      invite: result.rows[0]
+    });
+  } catch (error) {
+    console.error('Error deleting invite:', error);
+    res.status(500).json({ error: 'Failed to delete invite', details: error.message });
   }
 });
 

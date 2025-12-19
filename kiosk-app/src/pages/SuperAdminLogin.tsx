@@ -108,14 +108,14 @@ const SuperAdminLogin = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-900 p-4">
+    <div className="min-h-screen flex items-center justify-center bg-black p-4">
       {/* Subtle background pattern */}
       <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxnIGZpbGw9IiNmZmZmZmYiIGZpbGwtb3BhY2l0eT0iMC4wMyI+PHBhdGggZD0iTTM2IDM0djItSDI0di0yaDEyek0zNiAyNHYySDI0di0yaDEyeiIvPjwvZz48L2c+PC9zdmc+')] opacity-40" />
 
-      <Card className="w-full max-w-md relative z-10 border-slate-700 shadow-2xl bg-slate-800 text-slate-100">
+      <Card className="w-full max-w-md relative z-10 border-gray-700 shadow-2xl bg-gray-900 text-slate-100">
         <CardHeader className="text-center pb-2">
-          <div className="mx-auto mb-4 h-16 w-16 rounded-full bg-amber-500 flex items-center justify-center shadow-lg">
-            <Shield className="h-8 w-8 text-slate-900" />
+          <div className="mx-auto mb-4 h-16 w-16 rounded-full bg-blue-500 flex items-center justify-center shadow-lg">
+            <Shield className="h-8 w-8 text-white" />
           </div>
           <CardTitle className="text-3xl font-bold text-slate-100">
             Super Admin
@@ -129,8 +129,8 @@ const SuperAdminLogin = () => {
           {showForgotPassword ? (
             <div className="space-y-4">
               <div className="text-center space-y-2">
-                <div className="mx-auto mb-2 h-12 w-12 rounded-full bg-amber-500/10 flex items-center justify-center">
-                  <Mail className="h-6 w-6 text-amber-500" />
+                <div className="mx-auto mb-2 h-12 w-12 rounded-full bg-blue-500/10 flex items-center justify-center">
+                  <Mail className="h-6 w-6 text-blue-500" />
                 </div>
                 <h3 className="text-lg font-semibold text-slate-100">Reset Your Password</h3>
                 <p className="text-sm text-slate-400">
@@ -148,7 +148,7 @@ const SuperAdminLogin = () => {
                     placeholder="you@example.com"
                     value={resetEmail}
                     onChange={(e) => setResetEmail(e.target.value)}
-                    className="pl-10 bg-slate-700 border-slate-600 text-slate-100 placeholder:text-slate-500"
+                    className="pl-10 bg-gray-800 border-gray-600 text-slate-100 placeholder:text-slate-500"
                     disabled={loading}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
@@ -162,11 +162,11 @@ const SuperAdminLogin = () => {
               <Button
                 onClick={handleForgotPassword}
                 disabled={loading}
-                className="w-full h-12 text-base font-medium bg-amber-500 hover:bg-amber-600 text-slate-900"
+                className="w-full h-12 text-base font-medium bg-blue-500 hover:bg-blue-600 text-white"
               >
                 {loading ? (
                   <div className="flex items-center gap-3">
-                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-900 border-t-transparent" />
+                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent" />
                     <span>Sending...</span>
                   </div>
                 ) : (
@@ -181,7 +181,7 @@ const SuperAdminLogin = () => {
                   setResetEmail('');
                 }}
                 disabled={loading}
-                className="w-full text-slate-400 hover:text-slate-100 hover:bg-slate-700"
+                className="w-full text-slate-400 hover:text-slate-100 hover:bg-gray-800"
               >
                 <ArrowLeft className="h-4 w-4 mr-2" />
                 Back to Sign In
@@ -206,7 +206,7 @@ const SuperAdminLogin = () => {
                           setHasError(false);
                         }
                       }}
-                      className={`pl-10 bg-slate-700 border-slate-600 text-slate-100 placeholder:text-slate-500 ${hasError ? 'border-red-400 focus-visible:ring-red-400' : ''}`}
+                      className={`pl-10 bg-gray-800 border-gray-600 text-slate-100 placeholder:text-slate-500 ${hasError ? 'border-red-400 focus-visible:ring-red-400' : ''}`}
                       disabled={loading}
                     />
                   </div>
@@ -228,7 +228,7 @@ const SuperAdminLogin = () => {
                           setHasError(false);
                         }
                       }}
-                      className={`pl-10 bg-slate-700 border-slate-600 text-slate-100 placeholder:text-slate-500 ${hasError ? 'border-red-400 focus-visible:ring-red-400' : ''}`}
+                      className={`pl-10 bg-gray-800 border-gray-600 text-slate-100 placeholder:text-slate-500 ${hasError ? 'border-red-400 focus-visible:ring-red-400' : ''}`}
                       disabled={loading}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
@@ -247,11 +247,11 @@ const SuperAdminLogin = () => {
                 <Button
                   onClick={handleEmailSignIn}
                   disabled={loading}
-                  className="w-full h-12 text-base font-medium bg-amber-500 hover:bg-amber-600 text-slate-900"
+                  className="w-full h-12 text-base font-medium bg-blue-500 hover:bg-blue-600 text-white"
                 >
                   {loading ? (
                     <div className="flex items-center gap-3">
-                      <div className="h-5 w-5 animate-spin rounded-full border-2 border-slate-900 border-t-transparent" />
+                      <div className="h-5 w-5 animate-spin rounded-full border-2 border-white border-t-transparent" />
                       <span>Signing in...</span>
                     </div>
                   ) : (
@@ -266,7 +266,7 @@ const SuperAdminLogin = () => {
                       setShowForgotPassword(true);
                       setResetEmail(email);
                     }}
-                    className="text-sm text-amber-500 hover:underline"
+                    className="text-sm text-blue-500 hover:underline"
                   >
                     Forgot your password?
                   </button>
@@ -275,10 +275,10 @@ const SuperAdminLogin = () => {
 
               <div className="relative">
                 <div className="absolute inset-0 flex items-center">
-                  <span className="w-full border-t border-slate-600" />
+                  <span className="w-full border-t border-gray-600" />
                 </div>
                 <div className="relative flex justify-center text-xs uppercase">
-                  <span className="bg-slate-800 px-2 text-slate-500">
+                  <span className="bg-gray-900 px-2 text-slate-500">
                     Or continue with
                   </span>
                 </div>

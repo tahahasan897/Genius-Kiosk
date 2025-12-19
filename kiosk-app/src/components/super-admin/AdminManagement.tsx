@@ -37,10 +37,13 @@ import { Checkbox } from '@/components/ui/checkbox';
 import {
   getAdminUsers,
   getChains,
-  createAdminUser,
   updateAdminUser,
   deleteAdminUser,
+  getAdminInvites,
+  createAdminInvite,
+  deleteAdminInvite,
   type AdminUser,
+  type AdminInvite,
   type Chain,
 } from '@/api/superadmin';
 import {
@@ -53,46 +56,57 @@ import {
   Shield,
   Building2,
   Clock,
+  Mail,
+  UserPlus,
+  X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
-interface AdminFormData {
-  firebase_uid: string;
+interface InviteFormData {
   email: string;
+  is_super_admin: boolean;
+  chain_id: string;
+}
+
+interface EditFormData {
   display_name: string;
   is_super_admin: boolean;
   chain_id: string;
 }
 
-const emptyFormData: AdminFormData = {
-  firebase_uid: '',
+const emptyInviteFormData: InviteFormData = {
   email: '',
-  display_name: '',
   is_super_admin: false,
   chain_id: '',
 };
 
 const AdminManagement = () => {
   const [admins, setAdmins] = useState<AdminUser[]>([]);
+  const [invites, setInvites] = useState<AdminInvite[]>([]);
   const [chains, setChains] = useState<Chain[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Dialog states
-  const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const [showInviteDialog, setShowInviteDialog] = useState(false);
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [showCancelInviteDialog, setShowCancelInviteDialog] = useState(false);
   const [selectedAdmin, setSelectedAdmin] = useState<AdminUser | null>(null);
-  const [formData, setFormData] = useState<AdminFormData>(emptyFormData);
+  const [selectedInvite, setSelectedInvite] = useState<AdminInvite | null>(null);
+  const [inviteFormData, setInviteFormData] = useState<InviteFormData>(emptyInviteFormData);
+  const [editFormData, setEditFormData] = useState<EditFormData>({ display_name: '', is_super_admin: false, chain_id: '' });
   const [submitting, setSubmitting] = useState(false);
 
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [adminsData, chainsData] = await Promise.all([
+      const [adminsData, invitesData, chainsData] = await Promise.all([
         getAdminUsers(),
+        getAdminInvites('pending'),
         getChains({ includeInactive: false }),
       ]);
       setAdmins(adminsData.admins);
+      setInvites(invitesData.invites);
       setChains(chainsData.chains);
     } catch (error) {
       console.error('Error fetching data:', error);
@@ -106,35 +120,29 @@ const AdminManagement = () => {
     fetchData();
   }, []);
 
-  const handleCreate = async () => {
-    if (!formData.firebase_uid.trim()) {
-      toast.error('Firebase UID is required');
-      return;
-    }
-    if (!formData.email.trim()) {
+  const handleInvite = async () => {
+    if (!inviteFormData.email.trim()) {
       toast.error('Email is required');
       return;
     }
-    if (!formData.is_super_admin && !formData.chain_id) {
+    if (!inviteFormData.is_super_admin && !inviteFormData.chain_id) {
       toast.error('Please select a chain for non-super-admin users');
       return;
     }
 
     setSubmitting(true);
     try {
-      await createAdminUser({
-        firebase_uid: formData.firebase_uid,
-        email: formData.email,
-        display_name: formData.display_name || undefined,
-        is_super_admin: formData.is_super_admin,
-        chain_id: formData.is_super_admin ? undefined : parseInt(formData.chain_id),
+      await createAdminInvite({
+        email: inviteFormData.email,
+        is_super_admin: inviteFormData.is_super_admin,
+        chain_id: inviteFormData.is_super_admin ? undefined : parseInt(inviteFormData.chain_id),
       });
-      toast.success('Admin user created successfully');
-      setShowCreateDialog(false);
-      setFormData(emptyFormData);
+      toast.success('Invite sent successfully! They will become an admin when they sign up.');
+      setShowInviteDialog(false);
+      setInviteFormData(emptyInviteFormData);
       fetchData();
     } catch (error: any) {
-      toast.error(error.response?.data?.error || 'Failed to create admin user');
+      toast.error(error.response?.data?.error || 'Failed to create invite');
     } finally {
       setSubmitting(false);
     }
@@ -143,7 +151,7 @@ const AdminManagement = () => {
   const handleUpdate = async () => {
     if (!selectedAdmin) return;
 
-    if (!formData.is_super_admin && !formData.chain_id) {
+    if (!editFormData.is_super_admin && !editFormData.chain_id) {
       toast.error('Please select a chain for non-super-admin users');
       return;
     }
@@ -151,14 +159,13 @@ const AdminManagement = () => {
     setSubmitting(true);
     try {
       await updateAdminUser(selectedAdmin.user_id, {
-        display_name: formData.display_name || undefined,
-        is_super_admin: formData.is_super_admin,
-        chain_id: formData.is_super_admin ? null : (formData.chain_id ? parseInt(formData.chain_id) : null),
+        display_name: editFormData.display_name || undefined,
+        is_super_admin: editFormData.is_super_admin,
+        chain_id: editFormData.is_super_admin ? null : (editFormData.chain_id ? parseInt(editFormData.chain_id) : null),
       });
       toast.success('Admin user updated successfully');
       setShowEditDialog(false);
       setSelectedAdmin(null);
-      setFormData(emptyFormData);
       fetchData();
     } catch (error: any) {
       toast.error(error.response?.data?.error || 'Failed to update admin user');
@@ -184,11 +191,26 @@ const AdminManagement = () => {
     }
   };
 
+  const handleCancelInvite = async () => {
+    if (!selectedInvite) return;
+
+    setSubmitting(true);
+    try {
+      await deleteAdminInvite(selectedInvite.invite_id);
+      toast.success('Invite cancelled');
+      setShowCancelInviteDialog(false);
+      setSelectedInvite(null);
+      fetchData();
+    } catch (error: any) {
+      toast.error(error.response?.data?.error || 'Failed to cancel invite');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const openEditDialog = (admin: AdminUser) => {
     setSelectedAdmin(admin);
-    setFormData({
-      firebase_uid: admin.firebase_uid,
-      email: admin.email,
+    setEditFormData({
       display_name: admin.display_name || '',
       is_super_admin: admin.is_super_admin,
       chain_id: admin.chain_id?.toString() || '',
@@ -199,6 +221,11 @@ const AdminManagement = () => {
   const openDeleteDialog = (admin: AdminUser) => {
     setSelectedAdmin(admin);
     setShowDeleteDialog(true);
+  };
+
+  const openCancelInviteDialog = (invite: AdminInvite) => {
+    setSelectedInvite(invite);
+    setShowCancelInviteDialog(true);
   };
 
   const formatDate = (dateString: string | null) => {
@@ -218,39 +245,80 @@ const AdminManagement = () => {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold text-slate-100">Admin Management</h2>
-          <p className="text-slate-400 text-sm">Manage admin users and their permissions</p>
+          <p className="text-slate-400 text-sm">Manage admin users and invite new admins</p>
         </div>
         <Button
           onClick={() => {
-            setFormData(emptyFormData);
-            setShowCreateDialog(true);
+            setInviteFormData(emptyInviteFormData);
+            setShowInviteDialog(true);
           }}
-          className="bg-amber-500 hover:bg-amber-600 text-slate-900"
+          className="bg-blue-500 hover:bg-blue-600 text-white"
         >
-          <Plus className="h-4 w-4 mr-2" />
-          Add Admin
+          <UserPlus className="h-4 w-4 mr-2" />
+          Invite Admin
         </Button>
       </div>
 
       {/* Info Card */}
-      <Card className="bg-amber-500/10 border-amber-500/20">
+      <Card className="bg-blue-500/10 border-blue-500/20">
         <CardContent className="p-4">
           <div className="flex items-start gap-3">
-            <Shield className="h-5 w-5 text-amber-500 mt-0.5" />
+            <Mail className="h-5 w-5 text-blue-500 mt-0.5" />
             <div>
-              <p className="text-sm text-amber-200 font-medium">How to add an admin user</p>
-              <p className="text-xs text-amber-200/70 mt-1">
-                1. Have the user create an account at /login using email or Google sign-in.<br />
-                2. Get their Firebase UID from the Firebase Console (Authentication &gt; Users).<br />
-                3. Add them here with their Firebase UID and email.
+              <p className="text-sm text-blue-200 font-medium">How the invite system works</p>
+              <p className="text-xs text-blue-200/70 mt-1">
+                1. Enter the email address of the person you want to invite.<br />
+                2. Choose their role (Super Admin or Chain Admin).<br />
+                3. When they sign up or log in with that email, they'll automatically become an admin.
               </p>
             </div>
           </div>
         </CardContent>
       </Card>
 
+      {/* Pending Invites */}
+      {invites.length > 0 && (
+        <Card className="bg-gray-900 border-gray-700">
+          <CardContent className="p-4">
+            <div className="flex items-center gap-2 mb-4">
+              <Clock className="h-4 w-4 text-blue-500" />
+              <h3 className="font-medium text-slate-200">Pending Invites ({invites.length})</h3>
+            </div>
+            <div className="space-y-2">
+              {invites.map((invite) => (
+                <div
+                  key={invite.invite_id}
+                  className="flex items-center justify-between p-3 rounded-lg bg-gray-800/50"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="h-8 w-8 rounded-full bg-blue-500/20 flex items-center justify-center">
+                      <Mail className="h-4 w-4 text-blue-500" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-slate-200">{invite.email}</p>
+                      <p className="text-xs text-slate-500">
+                        {invite.is_super_admin ? 'Super Admin' : `Chain Admin - ${invite.chain_name || 'No chain'}`}
+                        {' • '}Invited {formatDate(invite.created_at)}
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => openCancelInviteDialog(invite)}
+                    className="text-slate-400 hover:text-red-400 hover:bg-gray-700"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Admins Table */}
-      <Card className="bg-slate-800 border-slate-700">
+      <Card className="bg-gray-900 border-gray-700">
         <CardContent className="p-0">
           {loading ? (
             <div className="flex items-center justify-center py-12">
@@ -259,19 +327,19 @@ const AdminManagement = () => {
           ) : admins.length === 0 ? (
             <div className="text-center py-12">
               <Users className="h-12 w-12 mx-auto text-slate-600 mb-3" />
-              <p className="text-slate-400">No admin users found</p>
+              <p className="text-slate-400">No admin users yet</p>
               <Button
-                onClick={() => setShowCreateDialog(true)}
+                onClick={() => setShowInviteDialog(true)}
                 variant="outline"
-                className="mt-4 border-slate-600 text-slate-300 hover:bg-slate-700"
+                className="mt-4 border-gray-600 text-slate-300 hover:bg-gray-800"
               >
-                Add your first admin
+                Invite your first admin
               </Button>
             </div>
           ) : (
             <Table>
               <TableHeader>
-                <TableRow className="border-slate-700 hover:bg-transparent">
+                <TableRow className="border-gray-700 hover:bg-transparent">
                   <TableHead className="text-slate-400">User</TableHead>
                   <TableHead className="text-slate-400">Role</TableHead>
                   <TableHead className="text-slate-400">Chain</TableHead>
@@ -284,12 +352,12 @@ const AdminManagement = () => {
                 {admins.map((admin) => (
                   <TableRow
                     key={admin.user_id}
-                    className="border-slate-700 hover:bg-slate-700/50"
+                    className="border-gray-700 hover:bg-gray-800/50"
                   >
                     <TableCell>
                       <div className="flex items-center gap-3">
-                        <div className="h-8 w-8 rounded-full bg-amber-500/20 flex items-center justify-center">
-                          <span className="text-sm font-medium text-amber-500">
+                        <div className="h-8 w-8 rounded-full bg-blue-500/20 flex items-center justify-center">
+                          <span className="text-sm font-medium text-blue-500">
                             {(admin.display_name || admin.email)[0].toUpperCase()}
                           </span>
                         </div>
@@ -303,12 +371,12 @@ const AdminManagement = () => {
                     </TableCell>
                     <TableCell>
                       {admin.is_super_admin ? (
-                        <Badge className="bg-amber-500/20 text-amber-400 hover:bg-amber-500/30">
+                        <Badge className="bg-blue-500/20 text-blue-400 hover:bg-blue-500/30">
                           <Shield className="h-3 w-3 mr-1" />
                           Super Admin
                         </Badge>
                       ) : (
-                        <Badge className="bg-blue-500/20 text-blue-400 hover:bg-blue-500/30">
+                        <Badge className="bg-cyan-500/20 text-cyan-400 hover:bg-cyan-500/30">
                           Chain Admin
                         </Badge>
                       )}
@@ -340,25 +408,25 @@ const AdminManagement = () => {
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="text-slate-400 hover:text-slate-100 hover:bg-slate-700"
+                            className="text-slate-400 hover:text-slate-100 hover:bg-gray-800"
                           >
                             <MoreHorizontal className="h-4 w-4" />
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent
                           align="end"
-                          className="bg-slate-800 border-slate-700 text-slate-100"
+                          className="bg-gray-900 border-gray-700 text-slate-100"
                         >
                           <DropdownMenuItem
                             onClick={() => openEditDialog(admin)}
-                            className="hover:bg-slate-700 cursor-pointer"
+                            className="hover:bg-gray-800 cursor-pointer"
                           >
                             <Pencil className="h-4 w-4 mr-2" />
                             Edit
                           </DropdownMenuItem>
                           <DropdownMenuItem
                             onClick={() => openDeleteDialog(admin)}
-                            className="text-red-400 hover:text-red-300 hover:bg-slate-700 cursor-pointer"
+                            className="text-red-400 hover:text-red-300 hover:bg-gray-800 cursor-pointer"
                           >
                             <Trash2 className="h-4 w-4 mr-2" />
                             Delete
@@ -374,76 +442,53 @@ const AdminManagement = () => {
         </CardContent>
       </Card>
 
-      {/* Create Dialog */}
-      <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
-        <DialogContent className="bg-slate-800 border-slate-700 text-slate-100 max-w-md">
+      {/* Invite Dialog */}
+      <Dialog open={showInviteDialog} onOpenChange={setShowInviteDialog}>
+        <DialogContent className="bg-gray-900 border-gray-700 text-slate-100 max-w-md">
           <DialogHeader>
-            <DialogTitle>Add New Admin</DialogTitle>
+            <DialogTitle>Invite New Admin</DialogTitle>
             <DialogDescription className="text-slate-400">
-              Add a new admin user to the platform.
+              Send an invite to grant admin access. They'll become an admin when they sign up.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label className="text-slate-300">Firebase UID *</Label>
-              <Input
-                placeholder="e.g., abc123xyz789..."
-                value={formData.firebase_uid}
-                onChange={(e) => setFormData({ ...formData, firebase_uid: e.target.value })}
-                className="bg-slate-700 border-slate-600 text-slate-100 placeholder:text-slate-500 font-mono text-sm"
-                disabled={submitting}
-              />
-              <p className="text-xs text-slate-500">
-                Get this from Firebase Console &gt; Authentication &gt; Users
-              </p>
-            </div>
-            <div className="space-y-2">
-              <Label className="text-slate-300">Email *</Label>
+              <Label className="text-slate-300">Email Address *</Label>
               <Input
                 type="email"
                 placeholder="admin@example.com"
-                value={formData.email}
-                onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                className="bg-slate-700 border-slate-600 text-slate-100 placeholder:text-slate-500"
-                disabled={submitting}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label className="text-slate-300">Display Name</Label>
-              <Input
-                placeholder="John Doe"
-                value={formData.display_name}
-                onChange={(e) => setFormData({ ...formData, display_name: e.target.value })}
-                className="bg-slate-700 border-slate-600 text-slate-100 placeholder:text-slate-500"
+                value={inviteFormData.email}
+                onChange={(e) => setInviteFormData({ ...inviteFormData, email: e.target.value })}
+                className="bg-gray-800 border-gray-600 text-slate-100 placeholder:text-slate-500"
                 disabled={submitting}
               />
             </div>
             <div className="flex items-center space-x-2">
               <Checkbox
                 id="is-super-admin"
-                checked={formData.is_super_admin}
+                checked={inviteFormData.is_super_admin}
                 onCheckedChange={(checked) =>
-                  setFormData({ ...formData, is_super_admin: checked as boolean, chain_id: '' })
+                  setInviteFormData({ ...inviteFormData, is_super_admin: checked as boolean, chain_id: '' })
                 }
-                className="border-slate-600 data-[state=checked]:bg-amber-500 data-[state=checked]:border-amber-500"
+                className="border-gray-600 data-[state=checked]:bg-blue-500 data-[state=checked]:border-blue-500"
                 disabled={submitting}
               />
               <Label htmlFor="is-super-admin" className="text-slate-300 cursor-pointer">
                 Super Admin (access to all chains)
               </Label>
             </div>
-            {!formData.is_super_admin && (
+            {!inviteFormData.is_super_admin && (
               <div className="space-y-2">
                 <Label className="text-slate-300">Assign to Chain *</Label>
                 <Select
-                  value={formData.chain_id}
-                  onValueChange={(value) => setFormData({ ...formData, chain_id: value })}
+                  value={inviteFormData.chain_id}
+                  onValueChange={(value) => setInviteFormData({ ...inviteFormData, chain_id: value })}
                   disabled={submitting}
                 >
-                  <SelectTrigger className="bg-slate-700 border-slate-600 text-slate-100">
+                  <SelectTrigger className="bg-gray-800 border-gray-600 text-slate-100">
                     <SelectValue placeholder="Select a chain" />
                   </SelectTrigger>
-                  <SelectContent className="bg-slate-800 border-slate-700 text-slate-100">
+                  <SelectContent className="bg-gray-900 border-gray-700 text-slate-100">
                     {chains.map((chain) => (
                       <SelectItem key={chain.chain_id} value={chain.chain_id.toString()}>
                         {chain.chain_name}
@@ -457,24 +502,24 @@ const AdminManagement = () => {
           <DialogFooter>
             <Button
               variant="outline"
-              onClick={() => setShowCreateDialog(false)}
+              onClick={() => setShowInviteDialog(false)}
               disabled={submitting}
-              className="border-slate-600 text-slate-300 hover:bg-slate-700"
+              className="border-gray-600 text-slate-300 hover:bg-gray-800"
             >
               Cancel
             </Button>
             <Button
-              onClick={handleCreate}
+              onClick={handleInvite}
               disabled={submitting}
-              className="bg-amber-500 hover:bg-amber-600 text-slate-900"
+              className="bg-blue-500 hover:bg-blue-600 text-white"
             >
               {submitting ? (
                 <>
                   <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                  Creating...
+                  Sending...
                 </>
               ) : (
-                'Create Admin'
+                'Send Invite'
               )}
             </Button>
           </DialogFooter>
@@ -483,7 +528,7 @@ const AdminManagement = () => {
 
       {/* Edit Dialog */}
       <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
-        <DialogContent className="bg-slate-800 border-slate-700 text-slate-100 max-w-md">
+        <DialogContent className="bg-gray-900 border-gray-700 text-slate-100 max-w-md">
           <DialogHeader>
             <DialogTitle>Edit Admin</DialogTitle>
             <DialogDescription className="text-slate-400">
@@ -494,8 +539,8 @@ const AdminManagement = () => {
             <div className="space-y-2">
               <Label className="text-slate-300">Email</Label>
               <Input
-                value={formData.email}
-                className="bg-slate-700 border-slate-600 text-slate-400"
+                value={selectedAdmin?.email || ''}
+                className="bg-gray-800 border-gray-600 text-slate-400"
                 disabled
               />
               <p className="text-xs text-slate-500">Email cannot be changed</p>
@@ -504,38 +549,38 @@ const AdminManagement = () => {
               <Label className="text-slate-300">Display Name</Label>
               <Input
                 placeholder="John Doe"
-                value={formData.display_name}
-                onChange={(e) => setFormData({ ...formData, display_name: e.target.value })}
-                className="bg-slate-700 border-slate-600 text-slate-100 placeholder:text-slate-500"
+                value={editFormData.display_name}
+                onChange={(e) => setEditFormData({ ...editFormData, display_name: e.target.value })}
+                className="bg-gray-800 border-gray-600 text-slate-100 placeholder:text-slate-500"
                 disabled={submitting}
               />
             </div>
             <div className="flex items-center space-x-2">
               <Checkbox
                 id="edit-is-super-admin"
-                checked={formData.is_super_admin}
+                checked={editFormData.is_super_admin}
                 onCheckedChange={(checked) =>
-                  setFormData({ ...formData, is_super_admin: checked as boolean, chain_id: '' })
+                  setEditFormData({ ...editFormData, is_super_admin: checked as boolean, chain_id: '' })
                 }
-                className="border-slate-600 data-[state=checked]:bg-amber-500 data-[state=checked]:border-amber-500"
+                className="border-gray-600 data-[state=checked]:bg-blue-500 data-[state=checked]:border-blue-500"
                 disabled={submitting}
               />
               <Label htmlFor="edit-is-super-admin" className="text-slate-300 cursor-pointer">
                 Super Admin (access to all chains)
               </Label>
             </div>
-            {!formData.is_super_admin && (
+            {!editFormData.is_super_admin && (
               <div className="space-y-2">
                 <Label className="text-slate-300">Assign to Chain *</Label>
                 <Select
-                  value={formData.chain_id}
-                  onValueChange={(value) => setFormData({ ...formData, chain_id: value })}
+                  value={editFormData.chain_id}
+                  onValueChange={(value) => setEditFormData({ ...editFormData, chain_id: value })}
                   disabled={submitting}
                 >
-                  <SelectTrigger className="bg-slate-700 border-slate-600 text-slate-100">
+                  <SelectTrigger className="bg-gray-800 border-gray-600 text-slate-100">
                     <SelectValue placeholder="Select a chain" />
                   </SelectTrigger>
-                  <SelectContent className="bg-slate-800 border-slate-700 text-slate-100">
+                  <SelectContent className="bg-gray-900 border-gray-700 text-slate-100">
                     {chains.map((chain) => (
                       <SelectItem key={chain.chain_id} value={chain.chain_id.toString()}>
                         {chain.chain_name}
@@ -551,14 +596,14 @@ const AdminManagement = () => {
               variant="outline"
               onClick={() => setShowEditDialog(false)}
               disabled={submitting}
-              className="border-slate-600 text-slate-300 hover:bg-slate-700"
+              className="border-gray-600 text-slate-300 hover:bg-gray-800"
             >
               Cancel
             </Button>
             <Button
               onClick={handleUpdate}
               disabled={submitting}
-              className="bg-amber-500 hover:bg-amber-600 text-slate-900"
+              className="bg-blue-500 hover:bg-blue-600 text-white"
             >
               {submitting ? (
                 <>
@@ -575,7 +620,7 @@ const AdminManagement = () => {
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
-        <DialogContent className="bg-slate-800 border-slate-700 text-slate-100">
+        <DialogContent className="bg-gray-900 border-gray-700 text-slate-100">
           <DialogHeader>
             <DialogTitle>Delete Admin</DialogTitle>
             <DialogDescription className="text-slate-400">
@@ -588,7 +633,7 @@ const AdminManagement = () => {
               variant="outline"
               onClick={() => setShowDeleteDialog(false)}
               disabled={submitting}
-              className="border-slate-600 text-slate-300 hover:bg-slate-700"
+              className="border-gray-600 text-slate-300 hover:bg-gray-800"
             >
               Cancel
             </Button>
@@ -605,6 +650,44 @@ const AdminManagement = () => {
                 </>
               ) : (
                 'Delete'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Cancel Invite Confirmation Dialog */}
+      <Dialog open={showCancelInviteDialog} onOpenChange={setShowCancelInviteDialog}>
+        <DialogContent className="bg-gray-900 border-gray-700 text-slate-100">
+          <DialogHeader>
+            <DialogTitle>Cancel Invite</DialogTitle>
+            <DialogDescription className="text-slate-400">
+              Are you sure you want to cancel the invite for <strong className="text-slate-200">{selectedInvite?.email}</strong>?
+              They will no longer be able to become an admin using this invite.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowCancelInviteDialog(false)}
+              disabled={submitting}
+              className="border-gray-600 text-slate-300 hover:bg-gray-800"
+            >
+              Keep Invite
+            </Button>
+            <Button
+              onClick={handleCancelInvite}
+              disabled={submitting}
+              variant="destructive"
+              className="bg-red-500 hover:bg-red-600"
+            >
+              {submitting ? (
+                <>
+                  <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                  Cancelling...
+                </>
+              ) : (
+                'Cancel Invite'
               )}
             </Button>
           </DialogFooter>
