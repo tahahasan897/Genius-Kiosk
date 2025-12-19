@@ -9,6 +9,9 @@ import {
   onAuthStateChanged,
   fetchSignInMethodsForEmail,
   sendPasswordResetEmail,
+  sendSignInLinkToEmail,
+  isSignInWithEmailLink,
+  signInWithEmailLink,
   type User
 } from 'firebase/auth';
 import type { FirebaseApp } from 'firebase/app';
@@ -145,6 +148,58 @@ export const resetPassword = async (email: string) => {
     await sendPasswordResetEmail(auth, email);
   } catch (error: any) {
     console.error('Error sending password reset email:', error);
+    throw error;
+  }
+};
+
+// Email link action code settings for admin invites
+export const getActionCodeSettings = (email: string) => {
+  // For development, use localhost for Firebase domain allowlist compatibility
+  // In production, use the actual origin
+  let origin = window.location.origin;
+  if (origin.includes('127.0.0.1') || origin.includes('localhost')) {
+    origin = 'http://localhost:8080';
+  }
+  return {
+    url: `${origin}/admin-invite-callback?email=${encodeURIComponent(email)}`,
+    handleCodeInApp: true,
+  };
+};
+
+// Send sign-in link email for admin invites
+export const sendAdminInviteLink = async (email: string) => {
+  if (!auth) {
+    throw new Error('Firebase is not configured. Please check your .env file.');
+  }
+  try {
+    const actionCodeSettings = getActionCodeSettings(email);
+    await sendSignInLinkToEmail(auth, email, actionCodeSettings);
+    // Store email in localStorage for retrieval after redirect
+    window.localStorage.setItem('emailForSignIn', email);
+  } catch (error: any) {
+    console.error('Error sending sign-in link:', error);
+    throw error;
+  }
+};
+
+// Check if current URL is a sign-in link
+export const checkIsSignInWithEmailLink = (url: string): boolean => {
+  if (!auth) return false;
+  return isSignInWithEmailLink(auth, url);
+};
+
+// Complete sign-in with email link
+export const completeSignInWithEmailLink = async (email: string, url: string) => {
+  if (!auth) {
+    throw new Error('Firebase is not configured. Please check your .env file.');
+  }
+  try {
+    const result = await signInWithEmailLink(auth, email, url);
+    // Clear the stored email
+    window.localStorage.removeItem('emailForSignIn');
+    return result.user;
+  } catch (error: any) {
+    console.error('Error completing sign-in with email link:', error);
     throw error;
   }
 };

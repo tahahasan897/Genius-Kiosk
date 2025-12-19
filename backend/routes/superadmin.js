@@ -869,10 +869,17 @@ router.delete('/admins/:id', requireSuperAdmin, async (req, res) => {
       return res.status(404).json({ error: 'Admin user not found' });
     }
 
+    // Also delete any associated invite so they can be re-invited
+    const deletedAdmin = result.rows[0];
+    await query(
+      'DELETE FROM admin_invites WHERE LOWER(email) = LOWER($1)',
+      [deletedAdmin.email]
+    );
+
     res.json({
       success: true,
       message: 'Admin user has been deleted',
-      admin: result.rows[0]
+      admin: deletedAdmin
     });
   } catch (error) {
     console.error('Error deleting admin user:', error);
@@ -976,6 +983,207 @@ router.post('/invites', requireSuperAdmin, async (req, res) => {
   } catch (error) {
     console.error('Error creating invite:', error);
     res.status(500).json({ error: 'Failed to create invite', details: error.message });
+  }
+});
+
+// Create invite AND send magic link email
+router.post('/invites/send-link', requireSuperAdmin, async (req, res) => {
+  try {
+    const { email, is_super_admin, chain_id } = req.body;
+
+    if (!email || !email.trim()) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+
+    // Check if email is already an admin
+    const existingAdmin = await query(
+      'SELECT user_id FROM admin_users WHERE LOWER(email) = $1',
+      [normalizedEmail]
+    );
+
+    if (existingAdmin.rows.length > 0) {
+      return res.status(400).json({ error: 'This email is already an admin' });
+    }
+
+    // Check if invite already exists
+    const existingInvite = await query(
+      'SELECT invite_id, accepted_at FROM admin_invites WHERE LOWER(email) = $1',
+      [normalizedEmail]
+    );
+
+    let invite;
+    if (existingInvite.rows.length > 0) {
+      if (existingInvite.rows[0].accepted_at) {
+        return res.status(400).json({ error: 'This invite has already been accepted' });
+      }
+      // Update existing invite (resend)
+      const updateResult = await query(
+        `UPDATE admin_invites
+         SET is_super_admin = $1, chain_id = $2, created_at = CURRENT_TIMESTAMP
+         WHERE invite_id = $3
+         RETURNING invite_id, email, is_super_admin, chain_id, created_at`,
+        [is_super_admin || false, is_super_admin ? null : (chain_id || null), existingInvite.rows[0].invite_id]
+      );
+      invite = updateResult.rows[0];
+    } else {
+      // Validate chain_id if not super admin
+      if (!is_super_admin && chain_id) {
+        const chainCheck = await query(
+          'SELECT chain_id FROM chains WHERE chain_id = $1 AND is_active = true',
+          [chain_id]
+        );
+        if (chainCheck.rows.length === 0) {
+          return res.status(400).json({ error: 'Invalid or inactive chain' });
+        }
+      }
+
+      // Create new invite
+      const result = await query(
+        `INSERT INTO admin_invites (email, is_super_admin, chain_id, invited_by)
+         VALUES ($1, $2, $3, $4)
+         RETURNING invite_id, email, is_super_admin, chain_id, created_at`,
+        [normalizedEmail, is_super_admin || false, is_super_admin ? null : (chain_id || null), req.adminUser.user_id]
+      );
+      invite = result.rows[0];
+    }
+
+    // Configure email transporter
+    const nodemailer = await import('nodemailer');
+    let transporter;
+
+    if (process.env.SMTP_HOST) {
+      transporter = nodemailer.default.createTransport({
+        host: process.env.SMTP_HOST,
+        port: parseInt(process.env.SMTP_PORT || '587'),
+        secure: process.env.SMTP_SECURE === 'true',
+        auth: {
+          user: process.env.SMTP_USER,
+          pass: process.env.SMTP_PASSWORD,
+        },
+      });
+    } else {
+      console.log('⚠️ SMTP not configured. Magic link will be logged to console.');
+      transporter = nodemailer.default.createTransport({
+        streamTransport: true,
+        newline: 'unix',
+        buffer: true,
+      });
+    }
+
+    // Generate the invite URL
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const inviteUrl = `${frontendUrl}/admin-invite-callback?email=${encodeURIComponent(normalizedEmail)}`;
+
+    const roleDescription = is_super_admin
+      ? 'Super Admin (access to all chains)'
+      : `Chain Admin`;
+
+    const mailOptions = {
+      from: process.env.EMAIL_FROM || 'noreply@aislegenius.com',
+      to: normalizedEmail,
+      subject: 'You have been invited to Aisle Genius Admin',
+      html: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Admin Invitation</title>
+        </head>
+        <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #0f172a;">
+          <table cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color: #0f172a; padding: 40px 20px;">
+            <tr>
+              <td align="center">
+                <table cellpadding="0" cellspacing="0" border="0" width="100%" style="max-width: 600px; background-color: #1e293b; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);">
+                  <!-- Header -->
+                  <tr>
+                    <td style="padding: 40px 40px 20px; text-align: center;">
+                      <div style="width: 64px; height: 64px; background: linear-gradient(135deg, #3b82f6, #2563eb); border-radius: 50%; margin: 0 auto 20px; display: flex; align-items: center; justify-content: center;">
+                        <span style="font-size: 28px; line-height: 64px; display: block; text-align: center; width: 100%;">&#128722;</span>
+                      </div>
+                      <h1 style="color: #f1f5f9; font-size: 24px; margin: 0 0 8px;">You're Invited!</h1>
+                      <p style="color: #94a3b8; font-size: 16px; margin: 0;">Welcome to Aisle Genius Admin Panel</p>
+                    </td>
+                  </tr>
+
+                  <!-- Content -->
+                  <tr>
+                    <td style="padding: 20px 40px;">
+                      <p style="color: #cbd5e1; font-size: 15px; line-height: 1.6; margin: 0 0 20px;">
+                        You've been invited to join the Aisle Genius admin team as a <strong style="color: #60a5fa;">${roleDescription}</strong>.
+                      </p>
+                      <p style="color: #cbd5e1; font-size: 15px; line-height: 1.6; margin: 0 0 30px;">
+                        Click the button below to activate your admin account.
+                      </p>
+
+                      <!-- CTA Button -->
+                      <table cellpadding="0" cellspacing="0" border="0" width="100%">
+                        <tr>
+                          <td align="center">
+                            <a href="${inviteUrl}" style="display: inline-block; padding: 14px 32px; background: linear-gradient(135deg, #3b82f6, #2563eb); color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px;">
+                              Activate Admin Access
+                            </a>
+                          </td>
+                        </tr>
+                      </table>
+
+                      <p style="color: #64748b; font-size: 13px; margin: 30px 0 0; text-align: center;">
+                        If the button doesn't work, copy and paste this link into your browser:
+                      </p>
+                      <p style="color: #3b82f6; font-size: 12px; word-break: break-all; margin: 8px 0 0; text-align: center;">
+                        ${inviteUrl}
+                      </p>
+                    </td>
+                  </tr>
+
+                  <!-- Footer -->
+                  <tr>
+                    <td style="padding: 20px 40px 40px; border-top: 1px solid #334155; margin-top: 30px;">
+                      <p style="color: #64748b; font-size: 12px; margin: 0; text-align: center;">
+                        This invitation was sent by ${req.adminUser.email}.<br>
+                        If you didn't expect this email, you can safely ignore it.
+                      </p>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </body>
+        </html>
+      `,
+      text: `
+You're Invited to Aisle Genius Admin!
+
+You've been invited to join the Aisle Genius admin team as a ${roleDescription}.
+
+Click the link below to activate your admin account:
+${inviteUrl}
+
+If you didn't expect this email, you can safely ignore it.
+
+This invitation was sent by ${req.adminUser.email}.
+      `,
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+
+    // Log for development if using stream transport
+    if (info.message) {
+      console.log('📧 Magic link email (dev mode):');
+      console.log(`   To: ${normalizedEmail}`);
+      console.log(`   Link: ${inviteUrl}`);
+    }
+
+    res.status(201).json({
+      ...invite,
+      message: 'Invitation email sent successfully'
+    });
+  } catch (error) {
+    console.error('Error creating invite with magic link:', error);
+    res.status(500).json({ error: 'Failed to send invitation', details: error.message });
   }
 });
 

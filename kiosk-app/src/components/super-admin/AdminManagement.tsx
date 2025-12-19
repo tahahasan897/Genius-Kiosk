@@ -46,6 +46,7 @@ import {
   type AdminInvite,
   type Chain,
 } from '@/api/superadmin';
+import { sendAdminInviteLink } from '@/lib/firebase';
 import {
   Plus,
   MoreHorizontal,
@@ -132,17 +133,27 @@ const AdminManagement = () => {
 
     setSubmitting(true);
     try {
+      // Step 1: Create invite in database
       await createAdminInvite({
         email: inviteFormData.email,
         is_super_admin: inviteFormData.is_super_admin,
         chain_id: inviteFormData.is_super_admin ? undefined : parseInt(inviteFormData.chain_id),
       });
-      toast.success('Invite sent successfully! They will become an admin when they sign up.');
+
+      // Step 2: Send magic link via Firebase
+      await sendAdminInviteLink(inviteFormData.email);
+
+      toast.success('Magic link sent! They can click the link in their email to activate admin access.');
       setShowInviteDialog(false);
       setInviteFormData(emptyInviteFormData);
       fetchData();
     } catch (error: any) {
-      toast.error(error.response?.data?.error || 'Failed to create invite');
+      // Check if it's a Firebase error about email link not enabled
+      if (error?.code === 'auth/operation-not-allowed') {
+        toast.error('Email link sign-in is not enabled in Firebase. Please enable it in the Firebase Console under Authentication > Sign-in method > Email/Password > Email link.');
+      } else {
+        toast.error(error.response?.data?.error || error.message || 'Failed to send invitation');
+      }
     } finally {
       setSubmitting(false);
     }
@@ -269,7 +280,7 @@ const AdminManagement = () => {
               <p className="text-xs text-blue-200/70 mt-1">
                 1. Enter the email address of the person you want to invite.<br />
                 2. Choose their role (Super Admin or Chain Admin).<br />
-                3. When they sign up or log in with that email, they'll automatically become an admin.
+                3. They'll receive a magic link email - one click activates their admin access.
               </p>
             </div>
           </div>
@@ -448,7 +459,7 @@ const AdminManagement = () => {
           <DialogHeader>
             <DialogTitle>Invite New Admin</DialogTitle>
             <DialogDescription className="text-slate-400">
-              Send an invite to grant admin access. They'll become an admin when they sign up.
+              Send a magic link to grant admin access. They can click the link to activate their account.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">

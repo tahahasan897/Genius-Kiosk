@@ -336,6 +336,16 @@ export const createAdminInvite = async (data: {
   return response.data;
 };
 
+export const sendInviteMagicLink = async (data: {
+  email: string;
+  is_super_admin?: boolean;
+  chain_id?: number;
+}): Promise<AdminInvite & { message: string }> => {
+  const headers = await getAuthHeaders();
+  const response = await axios.post(`${API_URL}/api/super-admin/invites/send-link`, data, { headers });
+  return response.data;
+};
+
 export const deleteAdminInvite = async (inviteId: number): Promise<{ success: boolean; message: string; invite: AdminInvite }> => {
   const headers = await getAuthHeaders();
   const response = await axios.delete(`${API_URL}/api/super-admin/invites/${inviteId}`, { headers });

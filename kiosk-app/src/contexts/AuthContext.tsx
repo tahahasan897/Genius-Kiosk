@@ -8,6 +8,7 @@ import {
   onAuthChange,
   checkEmailExists,
   resetPassword,
+  sendAdminInviteLink,
   type User
 } from '@/lib/firebase';
 import { checkAdminRole, type AdminRoleResponse } from '@/api/superadmin';
@@ -15,6 +16,7 @@ import { checkAdminRole, type AdminRoleResponse } from '@/api/superadmin';
 interface AuthContextType {
   user: User | null;
   loading: boolean;
+  isAdmin: boolean;
   isSuperAdmin: boolean;
   adminRole: AdminRoleResponse | null;
   signInWithGoogle: () => Promise<User | void>;
@@ -24,6 +26,7 @@ interface AuthContextType {
   checkEmailExists: (email: string) => Promise<{ exists: boolean; methods: string[] }>;
   resetPassword: (email: string) => Promise<void>;
   refreshAdminRole: () => Promise<AdminRoleResponse | null>;
+  sendAdminInviteLink: (email: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -80,17 +83,15 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
 
     // Timeout fallback - stop loading after 5 seconds if auth state doesn't resolve
     const timeout = setTimeout(() => {
-      if (loading) {
-        console.warn('Firebase auth state check timed out');
-        setLoading(false);
-      }
+      console.warn('Firebase auth state check timed out');
+      setLoading(false);
     }, 5000);
 
     return () => {
       unsubscribe();
       clearTimeout(timeout);
     };
-  }, [loading]);
+  }, []);
 
   const handleSignInWithGoogle = async () => {
     try {
@@ -140,9 +141,19 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
     }
   };
 
+  const handleSendAdminInviteLink = async (email: string) => {
+    try {
+      await sendAdminInviteLink(email);
+    } catch (error) {
+      console.error('Failed to send admin invite link:', error);
+      throw error;
+    }
+  };
+
   const value: AuthContextType = {
     user,
     loading,
+    isAdmin: adminRole?.isAdmin ?? false,
     isSuperAdmin: adminRole?.isSuperAdmin ?? false,
     adminRole,
     signInWithGoogle: handleSignInWithGoogle,
@@ -152,6 +163,7 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
     checkEmailExists,
     resetPassword: handleResetPassword,
     refreshAdminRole: fetchAdminRole,
+    sendAdminInviteLink: handleSendAdminInviteLink,
   };
 
   return (
