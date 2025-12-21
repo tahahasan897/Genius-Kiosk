@@ -71,3 +71,94 @@ Yes, you can!
 To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
 
 Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+
+---
+
+## Development with Firebase Emulator
+
+To avoid using Firebase API quotas during development, you can use the Firebase Auth Emulator. This provides a local authentication system that works exactly like production Firebase.
+
+### One-time Setup
+
+1. Install Firebase CLI globally:
+```sh
+npm install -g firebase-tools
+```
+
+2. Login to Firebase (required even for emulator):
+```sh
+firebase login
+```
+
+### Running the Emulator
+
+You need **two terminals** to run the full development environment:
+
+**Terminal 1 - Start Firebase Emulator (with auto-seeded test users):**
+```sh
+cd kiosk-app
+npm run emulator:start:auto
+```
+This automatically:
+- Starts the Auth Emulator on port 9099
+- Creates test users from `emulator-test-users.json`
+- Opens Emulator UI on port 4000
+
+**Terminal 2 - Start the frontend with emulator mode:**
+```sh
+cd kiosk-app
+npm run dev:emulator
+```
+
+**Alternative (manual):**
+If you prefer to start the emulator without auto-seeding:
+```sh
+cd kiosk-app
+npm run emulator:start  # Start emulator only
+npm run emulator:seed   # Manually seed users later
+```
+
+### Using the Emulator UI
+
+Open http://localhost:4000 in your browser to access the Firebase Emulator UI where you can:
+- Create test users instantly
+- View/edit user accounts
+- Delete all users to start fresh
+- No email verification required
+- No API quotas consumed
+
+### Setting Up Test Admin Users
+
+**One-time database setup:**
+
+Run the SQL script to add test users to your database:
+```sh
+psql -h <host> -p <port> -U <user> -d kiosk_system -f scripts/seed-db-admins.sql
+```
+
+This creates three test accounts:
+- `superadmin@test.com` - Super admin with full access
+- `chainadmin@test.com` - Chain admin for chain ID 1
+- `admin2@test.com` - Chain admin for chain ID 2
+
+All passwords: `password123`
+
+**The backend automatically syncs Firebase UIDs**, so you don't need to manually update them when the emulator restarts!
+
+**Adding more test users:**
+
+1. Edit `emulator-test-users.json` to add new users
+2. Restart the emulator with `npm run emulator:start:auto`
+3. Add corresponding entries to the database
+
+### Environment Files
+
+- `.env` - Production Firebase config
+- `.env.emulator` - Emulator mode (auto-loaded with `npm run dev:emulator`)
+
+### Important Notes
+
+- Emulator data is reset when you stop the emulator
+- Google Sign-in works differently in emulator (creates a mock Google account)
+- The backend still runs normally - only Firebase auth is emulated
+- To switch back to production Firebase, just run `npm run dev` instead

@@ -5,6 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:emulator": "vite --mode emulator",
+    "emulator:start": "firebase emulators:start --only auth",
+    "emulator:start:auto": "cd .. && ./scripts/start-emulator-with-users.sh",
+    "emulator:seed": "cd .. && node scripts/seed-emulator-users.js",
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "lint": "eslint .",

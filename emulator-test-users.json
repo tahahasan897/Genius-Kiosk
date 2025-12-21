@@ -1,0 +1,24 @@
+{
+  "users": [
+    {
+      "email": "superadmin@test.com",
+      "password": "password123",
+      "displayName": "Super Admin Test",
+      "isSuperAdmin": true
+    },
+    {
+      "email": "chainadmin@test.com",
+      "password": "password123",
+      "displayName": "Chain Admin Test",
+      "isSuperAdmin": false,
+      "chainIds": [1]
+    },
+    {
+      "email": "admin2@test.com",
+      "password": "password123",
+      "displayName": "Chain Admin 2",
+      "isSuperAdmin": false,
+      "chainIds": [2]
+    }
+  ]
+}

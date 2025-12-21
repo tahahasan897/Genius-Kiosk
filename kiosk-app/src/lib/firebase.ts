@@ -1,6 +1,7 @@
 import { initializeApp } from 'firebase/app';
 import {
   getAuth,
+  connectAuthEmulator,
   GoogleAuthProvider,
   signInWithPopup,
   createUserWithEmailAndPassword,
@@ -17,6 +18,9 @@ import {
 } from 'firebase/auth';
 import type { FirebaseApp } from 'firebase/app';
 import type { Auth } from 'firebase/auth';
+
+// Check if we should use Firebase Auth Emulator
+const useEmulator = import.meta.env.VITE_USE_FIREBASE_EMULATOR === 'true';
 
 // Firebase configuration
 const firebaseConfig = {
@@ -43,17 +47,36 @@ let app: FirebaseApp | null = null;
 let auth: Auth | null = null;
 let googleProvider: GoogleAuthProvider | null = null;
 
-if (isFirebaseConfigured()) {
+if (isFirebaseConfigured() || useEmulator) {
   try {
-    app = initializeApp(firebaseConfig);
+    // For emulator mode, we still need a basic config (can use dummy values)
+    const config = useEmulator ? {
+      apiKey: 'demo-api-key',
+      authDomain: 'demo-project.firebaseapp.com',
+      projectId: 'demo-project',
+      storageBucket: 'demo-project.appspot.com',
+      messagingSenderId: '123456789',
+      appId: '1:123456789:web:abcdef'
+    } : firebaseConfig;
+
+    app = initializeApp(config);
     auth = getAuth(app);
     googleProvider = new GoogleAuthProvider();
-    console.log('✅ Firebase initialized successfully');
+
+    // Connect to Firebase Auth Emulator in development
+    if (useEmulator) {
+      connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
+      console.log('🔧 Firebase Auth Emulator connected at http://127.0.0.1:9099');
+      console.log('📊 Emulator UI available at http://127.0.0.1:4000');
+    } else {
+      console.log('✅ Firebase initialized successfully (production mode)');
+    }
   } catch (error) {
     console.error('❌ Firebase initialization error:', error);
   }
 } else {
   console.warn('⚠️ Firebase not configured. Please set environment variables in .env file');
+  console.warn('💡 Tip: Set VITE_USE_FIREBASE_EMULATOR=true to use the local emulator');
 }
 
 // Sign in with Google
