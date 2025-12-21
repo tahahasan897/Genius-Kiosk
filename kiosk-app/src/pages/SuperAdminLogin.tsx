@@ -9,7 +9,7 @@ import { toast } from 'sonner';
 import { Shield, Mail, Lock, ArrowLeft } from 'lucide-react';
 
 const SuperAdminLogin = () => {
-  const { signInWithGoogle, signInWithEmail, user, isSuperAdmin, refreshAdminRole, resetPassword } = useAuth();
+  const { signInWithGoogle, signInWithEmail, user, isAdmin, refreshAdminRole, resetPassword } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [loading, setLoading] = useState(false);
@@ -23,25 +23,25 @@ const SuperAdminLogin = () => {
   // Get the intended destination or default to /super-admin
   const from = (location.state as { from?: { pathname: string } })?.from?.pathname || '/super-admin';
 
-  // Check if user is already logged in and is a super admin
+  // Check if user is already logged in and is an admin (super or chain)
   useEffect(() => {
-    if (user && isSuperAdmin) {
+    if (user && isAdmin) {
       navigate(from, { replace: true });
     }
-  }, [user, isSuperAdmin, navigate, from]);
+  }, [user, isAdmin, navigate, from]);
 
   const handleGoogleSignIn = async () => {
     setLoading(true);
     try {
       await signInWithGoogle();
-      // Refresh admin role to check if super admin
+      // Refresh admin role to check if admin
       const role = await refreshAdminRole();
 
-      if (role?.isSuperAdmin) {
+      if (role?.isAdmin) {
         toast.success('Signed in successfully!');
         navigate(from, { replace: true });
       } else {
-        toast.error('Access denied. You are not a super admin.');
+        toast.error('Access denied. You are not an admin.');
       }
     } catch (error: any) {
       console.error('Sign in error:', error);
@@ -63,14 +63,14 @@ const SuperAdminLogin = () => {
     setLoading(true);
     try {
       await signInWithEmail(email, password);
-      // Refresh admin role to check if super admin
+      // Refresh admin role to check if admin
       const role = await refreshAdminRole();
 
-      if (role?.isSuperAdmin) {
+      if (role?.isAdmin) {
         toast.success('Signed in successfully!');
         navigate(from, { replace: true });
       } else {
-        toast.error('Access denied. You are not a super admin.');
+        toast.error('Access denied. You are not an admin.');
       }
     } catch (error: any) {
       console.error('Sign in error:', error);

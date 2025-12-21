@@ -313,17 +313,19 @@ const StoreManagement = () => {
             <div className="text-center py-12">
               <StoreIcon className="h-12 w-12 mx-auto text-slate-600 mb-3" />
               <p className="text-slate-400">
-                {chains.length === 0
-                  ? 'Create a chain first before adding stores'
-                  : 'No stores found'}
+                {showInactive
+                  ? 'No inactive stores'
+                  : chains.length === 0
+                    ? 'Create a chain first before adding stores'
+                    : 'No stores found'}
               </p>
-              {chains.length > 0 && (
+              {chains.length > 0 && !showInactive && (
                 <Button
                   onClick={() => setShowCreateDialog(true)}
                   variant="outline"
                   className="mt-4 border-gray-600 text-slate-300 hover:bg-gray-800"
                 >
-                  Add your first store
+                  Add First Store
                 </Button>
               )}
             </div>

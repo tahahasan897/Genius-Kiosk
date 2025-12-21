@@ -24,6 +24,8 @@ export interface AdminUser {
   is_super_admin: boolean;
   chain_id: number | null;
   chain_name?: string | null;
+  chain_ids?: number[];
+  chain_names?: string[];
   created_at: string;
   last_login: string | null;
 }
@@ -289,6 +291,7 @@ export const updateAdminUser = async (
     display_name?: string;
     is_super_admin?: boolean;
     chain_id?: number | null;
+    chain_ids?: number[];
   }
 ): Promise<AdminUser> => {
   const headers = await getAuthHeaders();
@@ -311,7 +314,9 @@ export interface AdminInvite {
   email: string;
   is_super_admin: boolean;
   chain_id: number | null;
+  chain_ids?: number[];
   chain_name?: string | null;
+  chain_names?: string[];
   invited_by_email?: string | null;
   created_at: string;
   accepted_at: string | null;
@@ -330,6 +335,7 @@ export const createAdminInvite = async (data: {
   email: string;
   is_super_admin?: boolean;
   chain_id?: number;
+  chain_ids?: number[];
 }): Promise<AdminInvite> => {
   const headers = await getAuthHeaders();
   const response = await axios.post(`${API_URL}/api/super-admin/invites`, data, { headers });

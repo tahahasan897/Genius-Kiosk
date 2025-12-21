@@ -13,6 +13,7 @@ import Login from "./pages/Login";
 import SuperAdmin from "./pages/SuperAdmin";
 import SuperAdminLogin from "./pages/SuperAdminLogin";
 import AdminInviteCallback from "./pages/AdminInviteCallback";
+import SetPassword from "./pages/SetPassword";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -39,6 +40,7 @@ const App = () => (
                   }
                 />
                 <Route path="/super-admin/login" element={<SuperAdminLogin />} />
+                <Route path="/super-admin/set-password" element={<SetPassword />} />
                 <Route path="/admin-invite-callback" element={<AdminInviteCallback />} />
                 <Route
                   path="/super-admin"

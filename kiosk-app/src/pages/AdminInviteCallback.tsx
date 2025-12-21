@@ -30,10 +30,16 @@ const AdminInviteCallback = () => {
     if (hasAttemptedSignIn.current) return;
 
     const processSignIn = async () => {
+      console.log('AdminInviteCallback: Processing sign-in...');
+      console.log('Current user:', user?.email);
+      console.log('Is super admin:', isSuperAdmin);
+      console.log('Admin role:', adminRole);
+
       // If user is already authenticated and is an admin, redirect
-      if (user && (isSuperAdmin || adminRole?.isAdmin)) {
+      if (user && (adminRole?.isAdmin || adminRole?.isSuperAdmin)) {
+        console.log('User already authenticated as admin, redirecting...');
         setState('already_authenticated');
-        setTimeout(() => navigate('/super-admin', { replace: true }), 2000);
+        setTimeout(() => navigate('/super-admin', { replace: true }), 1500);
         return;
       }
 
@@ -41,14 +47,38 @@ const AdminInviteCallback = () => {
       const currentUrl = window.location.href;
       console.log('Checking sign-in link:', currentUrl);
 
-      if (!checkIsSignInWithEmailLink(currentUrl)) {
-        console.log('Not a valid sign-in link');
+      const isValidSignInLink = checkIsSignInWithEmailLink(currentUrl);
+      console.log('Is valid Firebase sign-in link:', isValidSignInLink);
+
+      if (!isValidSignInLink) {
+        // Check if email is in URL - might be a plain invite link
+        const emailFromUrl = searchParams.get('email');
+        if (emailFromUrl && !user) {
+          console.log('Plain invite URL detected, redirecting to login...');
+          // Not a Firebase magic link but has email - redirect to login
+          toast.info('Please sign in to activate your admin access.');
+          navigate('/super-admin/login', { replace: true });
+          return;
+        }
+
+        // If user is signed in but not an admin, try refreshing their role
+        if (user) {
+          console.log('User signed in but no admin role, refreshing...');
+          const role = await refreshAdminRole();
+          if (role?.isAdmin) {
+            setState('already_authenticated');
+            setTimeout(() => navigate('/super-admin', { replace: true }), 1500);
+            return;
+          }
+        }
+
+        console.log('Not a valid sign-in link and no valid user state');
         setState('error');
         setError('Invalid or expired invitation link. Please request a new invite from your administrator.');
         return;
       }
 
-      console.log('Valid sign-in link detected');
+      console.log('Valid Firebase sign-in link detected');
 
       // Try to get email from URL params or localStorage
       const emailFromUrl = searchParams.get('email');
@@ -69,7 +99,7 @@ const AdminInviteCallback = () => {
     };
 
     processSignIn();
-  }, [user, isSuperAdmin, adminRole]);
+  }, [user, adminRole]);
 
   const handleSignIn = async (emailToUse: string) => {
     setLoading(true);
@@ -78,18 +108,33 @@ const AdminInviteCallback = () => {
 
     try {
       const currentUrl = window.location.href;
+      console.log('Completing sign-in with email link for:', emailToUse);
+
       await completeSignInWithEmailLink(emailToUse, currentUrl);
+      console.log('Firebase sign-in completed successfully');
+
+      // Small delay to ensure Firebase auth state is propagated
+      await new Promise(resolve => setTimeout(resolve, 500));
 
       // Refresh admin role to trigger auto-promotion
+      console.log('Refreshing admin role...');
       const role = await refreshAdminRole();
+      console.log('Admin role response:', role);
 
       if (role?.isAdmin) {
         setState('success');
         toast.success('Welcome! You now have admin access.');
+
+        // Set flag indicating user needs to set a password
+        window.localStorage.setItem('needsPasswordSetup', 'true');
+
+        // Navigate to set password page after a brief moment for UI feedback
         setTimeout(() => {
-          navigate('/super-admin', { replace: true });
-        }, 2000);
+          console.log('Navigating to /super-admin/set-password...');
+          navigate('/super-admin/set-password', { replace: true });
+        }, 1500);
       } else {
+        console.log('No admin role found for this user');
         setState('error');
         setError('Sign-in successful, but no pending invite was found for this email. Please contact your administrator.');
       }
@@ -145,7 +190,7 @@ const AdminInviteCallback = () => {
 
           <CardDescription className="text-base mt-2 text-slate-400">
             {state === 'verifying' && 'Please wait while we verify your invitation...'}
-            {state === 'success' && 'Your admin account has been activated.'}
+            {state === 'success' && 'Your admin account has been activated. Setting up your password...'}
             {state === 'error' && error}
             {state === 'email_required' && 'Please enter the email address where you received the invitation.'}
             {state === 'already_authenticated' && 'Redirecting to admin panel...'}
@@ -215,7 +260,23 @@ const AdminInviteCallback = () => {
             </div>
           )}
 
-          {(state === 'success' || state === 'already_authenticated') && (
+          {state === 'success' && (
+            <div className="flex flex-col items-center justify-center py-4 gap-4">
+              <div className="flex items-center gap-2">
+                <Loader2 className="h-5 w-5 animate-spin text-blue-500" />
+                <span className="text-slate-400">Setting up your password...</span>
+              </div>
+              <Button
+                onClick={() => navigate('/super-admin/set-password', { replace: true })}
+                variant="ghost"
+                className="text-blue-500 hover:text-blue-400 hover:bg-gray-800"
+              >
+                Click here if not redirected
+              </Button>
+            </div>
+          )}
+
+          {state === 'already_authenticated' && (
             <div className="flex flex-col items-center justify-center py-4 gap-4">
               <div className="flex items-center gap-2">
                 <Loader2 className="h-5 w-5 animate-spin text-blue-500" />

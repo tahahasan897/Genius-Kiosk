@@ -228,14 +228,18 @@ const ChainManagement = () => {
           ) : chains.length === 0 ? (
             <div className="text-center py-12">
               <Building2 className="h-12 w-12 mx-auto text-slate-600 mb-3" />
-              <p className="text-slate-400">No chains found</p>
-              <Button
-                onClick={() => setShowCreateDialog(true)}
-                variant="outline"
-                className="mt-4 border-gray-600 text-slate-300 hover:bg-gray-800"
-              >
-                Add your first chain
-              </Button>
+              <p className="text-slate-400">
+                {showInactive ? 'No inactive chains' : 'No chains found'}
+              </p>
+              {!showInactive && (
+                <Button
+                  onClick={() => setShowCreateDialog(true)}
+                  variant="outline"
+                  className="mt-4 border-gray-600 text-slate-300 hover:bg-gray-800"
+                >
+                  Add First Chain
+                </Button>
+              )}
             </div>
           ) : (
             <Table>

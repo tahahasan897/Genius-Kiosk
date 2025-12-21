@@ -18,7 +18,7 @@ import StoreManagement from '@/components/super-admin/StoreManagement';
 import AdminManagement from '@/components/super-admin/AdminManagement';
 
 const SuperAdmin = () => {
-  const { user, signOut, adminRole } = useAuth();
+  const { user, signOut, adminRole, isSuperAdmin } = useAuth();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('dashboard');
 
@@ -32,6 +32,10 @@ const SuperAdmin = () => {
     }
   };
 
+  // Get role display info
+  const roleLabel = isSuperAdmin ? 'Super Admin' : 'Chain Admin';
+  const roleColor = isSuperAdmin ? 'bg-blue-500' : 'bg-cyan-500';
+
   return (
     <div className="min-h-screen bg-black text-slate-100">
       {/* Header */}
@@ -40,11 +44,11 @@ const SuperAdmin = () => {
           <div className="flex items-center justify-between">
             {/* Logo & Title */}
             <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-lg bg-blue-500 flex items-center justify-center shadow-lg">
+              <div className={`h-10 w-10 rounded-lg ${roleColor} flex items-center justify-center shadow-lg`}>
                 <Shield className="h-6 w-6 text-white" />
               </div>
               <div>
-                <h1 className="text-xl font-bold text-slate-100">Super Admin</h1>
+                <h1 className="text-xl font-bold text-slate-100">{roleLabel}</h1>
                 <p className="text-xs text-slate-400">Aisle Genius Platform</p>
               </div>
             </div>
@@ -56,8 +60,8 @@ const SuperAdmin = () => {
                   variant="ghost"
                   className="flex items-center gap-2 text-slate-300 hover:text-slate-100 hover:bg-gray-800"
                 >
-                  <div className="h-8 w-8 rounded-full bg-blue-500/20 flex items-center justify-center">
-                    <span className="text-sm font-medium text-blue-500">
+                  <div className={`h-8 w-8 rounded-full ${roleColor}/20 flex items-center justify-center`}>
+                    <span className={`text-sm font-medium ${isSuperAdmin ? 'text-blue-500' : 'text-cyan-500'}`}>
                       {(user?.displayName || user?.email || 'U')[0].toUpperCase()}
                     </span>
                   </div>
@@ -72,8 +76,11 @@ const SuperAdmin = () => {
                 className="w-56 bg-gray-900 border-gray-700 text-slate-100"
               >
                 <div className="px-3 py-2">
-                  <p className="text-sm font-medium">{adminRole?.displayName || 'Super Admin'}</p>
+                  <p className="text-sm font-medium">{adminRole?.displayName || roleLabel}</p>
                   <p className="text-xs text-slate-400">{user?.email}</p>
+                  <p className={`text-xs mt-1 ${isSuperAdmin ? 'text-blue-400' : 'text-cyan-400'}`}>
+                    {roleLabel}
+                  </p>
                 </div>
                 <DropdownMenuSeparator className="bg-gray-700" />
                 <DropdownMenuItem
@@ -100,13 +107,16 @@ const SuperAdmin = () => {
               <LayoutDashboard className="h-4 w-4 mr-2" />
               Dashboard
             </TabsTrigger>
-            <TabsTrigger
-              value="chains"
-              className="data-[state=active]:bg-blue-500 data-[state=active]:text-white text-slate-400 hover:text-slate-100"
-            >
-              <Building2 className="h-4 w-4 mr-2" />
-              Chains
-            </TabsTrigger>
+            {/* Chain admins don't see the Chains tab - they only manage their assigned chain */}
+            {isSuperAdmin && (
+              <TabsTrigger
+                value="chains"
+                className="data-[state=active]:bg-blue-500 data-[state=active]:text-white text-slate-400 hover:text-slate-100"
+              >
+                <Building2 className="h-4 w-4 mr-2" />
+                Chains
+              </TabsTrigger>
+            )}
             <TabsTrigger
               value="stores"
               className="data-[state=active]:bg-blue-500 data-[state=active]:text-white text-slate-400 hover:text-slate-100"
@@ -114,30 +124,37 @@ const SuperAdmin = () => {
               <Store className="h-4 w-4 mr-2" />
               Stores
             </TabsTrigger>
-            <TabsTrigger
-              value="admins"
-              className="data-[state=active]:bg-blue-500 data-[state=active]:text-white text-slate-400 hover:text-slate-100"
-            >
-              <Users className="h-4 w-4 mr-2" />
-              Admins
-            </TabsTrigger>
+            {/* Only super admins can manage other admins */}
+            {isSuperAdmin && (
+              <TabsTrigger
+                value="admins"
+                className="data-[state=active]:bg-blue-500 data-[state=active]:text-white text-slate-400 hover:text-slate-100"
+              >
+                <Users className="h-4 w-4 mr-2" />
+                Admins
+              </TabsTrigger>
+            )}
           </TabsList>
 
           <TabsContent value="dashboard" className="mt-6">
             <SuperAdminDashboard onNavigateToTab={setActiveTab} />
           </TabsContent>
 
-          <TabsContent value="chains" className="mt-6">
-            <ChainManagement />
-          </TabsContent>
+          {isSuperAdmin && (
+            <TabsContent value="chains" className="mt-6">
+              <ChainManagement />
+            </TabsContent>
+          )}
 
           <TabsContent value="stores" className="mt-6">
             <StoreManagement />
           </TabsContent>
 
-          <TabsContent value="admins" className="mt-6">
-            <AdminManagement />
-          </TabsContent>
+          {isSuperAdmin && (
+            <TabsContent value="admins" className="mt-6">
+              <AdminManagement />
+            </TabsContent>
+          )}
         </Tabs>
       </main>
     </div>

@@ -4,7 +4,54 @@ import pool, { query } from '../db.js';
 const router = express.Router();
 
 // ============================================
-// MIDDLEWARE: Require Super Admin
+// MIDDLEWARE: Require Admin (any admin - super or chain)
+// ============================================
+
+const requireAdmin = async (req, res, next) => {
+  try {
+    const firebaseUid = req.headers['x-firebase-uid'];
+
+    if (!firebaseUid) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    // Check if user exists in admin_users and get their chain assignments
+    const result = await query(
+      `SELECT au.user_id, au.email, au.display_name, au.is_super_admin, au.chain_id,
+              COALESCE(array_agg(aca.chain_id) FILTER (WHERE aca.chain_id IS NOT NULL), '{}') as chain_ids
+       FROM admin_users au
+       LEFT JOIN admin_chain_assignments aca ON au.user_id = aca.user_id
+       WHERE au.firebase_uid = $1
+       GROUP BY au.user_id, au.email, au.display_name, au.is_super_admin, au.chain_id`,
+      [firebaseUid]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(403).json({ error: 'Access denied. Not an admin user.' });
+    }
+
+    const adminUser = result.rows[0];
+    // Ensure chain_ids is always an array
+    adminUser.chain_ids = adminUser.chain_ids || [];
+
+    // Attach admin user to request for use in routes
+    req.adminUser = adminUser;
+
+    // Update last login
+    await query(
+      'UPDATE admin_users SET last_login = CURRENT_TIMESTAMP WHERE user_id = $1',
+      [adminUser.user_id]
+    );
+
+    next();
+  } catch (error) {
+    console.error('Admin auth error:', error);
+    res.status(500).json({ error: 'Authentication failed' });
+  }
+};
+
+// ============================================
+// MIDDLEWARE: Require Super Admin (for admin management only)
 // ============================================
 
 const requireSuperAdmin = async (req, res, next) => {
@@ -17,7 +64,7 @@ const requireSuperAdmin = async (req, res, next) => {
 
     // Check if user exists in admin_users and is a super admin
     const result = await query(
-      'SELECT user_id, email, display_name, is_super_admin FROM admin_users WHERE firebase_uid = $1',
+      'SELECT user_id, email, display_name, is_super_admin, chain_id FROM admin_users WHERE firebase_uid = $1',
       [firebaseUid]
     );
 
@@ -57,27 +104,63 @@ router.get('/me', async (req, res) => {
     const firebaseUid = req.headers['x-firebase-uid'];
     const userEmail = req.headers['x-firebase-email'];
 
+    console.log('📋 /me endpoint called:');
+    console.log('   Firebase UID:', firebaseUid ? firebaseUid.substring(0, 10) + '...' : 'none');
+    console.log('   Email:', userEmail || 'none');
+
     if (!firebaseUid) {
+      console.log('   ❌ No Firebase UID provided');
       return res.json({ isAdmin: false, isSuperAdmin: false });
     }
 
-    // Check if user already exists as admin
-    const existingAdmin = await query(
-      'SELECT user_id, email, display_name, is_super_admin, chain_id FROM admin_users WHERE firebase_uid = $1',
+    // Check if user already exists as admin (by firebase_uid first, then by email)
+    let existingAdmin = await query(
+      `SELECT au.user_id, au.email, au.display_name, au.is_super_admin, au.chain_id, au.firebase_uid,
+              COALESCE(array_agg(aca.chain_id) FILTER (WHERE aca.chain_id IS NOT NULL), '{}') as chain_ids
+       FROM admin_users au
+       LEFT JOIN admin_chain_assignments aca ON au.user_id = aca.user_id
+       WHERE au.firebase_uid = $1
+       GROUP BY au.user_id, au.email, au.display_name, au.is_super_admin, au.chain_id, au.firebase_uid`,
       [firebaseUid]
     );
 
+    // If not found by firebase_uid, check by email (user might be signing in with different method)
+    if (existingAdmin.rows.length === 0 && userEmail) {
+      existingAdmin = await query(
+        `SELECT au.user_id, au.email, au.display_name, au.is_super_admin, au.chain_id, au.firebase_uid,
+                COALESCE(array_agg(aca.chain_id) FILTER (WHERE aca.chain_id IS NOT NULL), '{}') as chain_ids
+         FROM admin_users au
+         LEFT JOIN admin_chain_assignments aca ON au.user_id = aca.user_id
+         WHERE LOWER(au.email) = LOWER($1)
+         GROUP BY au.user_id, au.email, au.display_name, au.is_super_admin, au.chain_id, au.firebase_uid`,
+        [userEmail]
+      );
+
+      // If found by email, update the firebase_uid to the current one
+      if (existingAdmin.rows.length > 0) {
+        console.log(`   🔄 Admin found by email, updating firebase_uid...`);
+        await query(
+          'UPDATE admin_users SET firebase_uid = $1 WHERE user_id = $2',
+          [firebaseUid, existingAdmin.rows[0].user_id]
+        );
+      }
+    }
+
     if (existingAdmin.rows.length > 0) {
       const adminUser = existingAdmin.rows[0];
+      console.log(`   ✅ Existing admin found: ${adminUser.email} (super: ${adminUser.is_super_admin}, chains: ${adminUser.chain_ids})`);
       return res.json({
         isAdmin: true,
         isSuperAdmin: adminUser.is_super_admin,
         userId: adminUser.user_id,
         email: adminUser.email,
         displayName: adminUser.display_name,
-        chainId: adminUser.chain_id
+        chainId: adminUser.chain_id, // Legacy single chain
+        chainIds: adminUser.chain_ids || [] // New multi-chain array
       });
     }
+
+    console.log('   ℹ️ No existing admin record found');
 
     // User is not an admin yet - check for bootstrap or invite
     if (userEmail) {
@@ -93,7 +176,7 @@ router.get('/me', async (req, res) => {
              RETURNING user_id, email, display_name, is_super_admin, chain_id`,
             [firebaseUid, userEmail, 'Super Admin']
           );
-          console.log(`✅ Bootstrap: Created first super admin for ${userEmail}`);
+          console.log(`   ✅ Bootstrap: Created first super admin for ${userEmail}`);
           return res.json({
             isAdmin: true,
             isSuperAdmin: true,
@@ -101,48 +184,86 @@ router.get('/me', async (req, res) => {
             email: newAdmin.rows[0].email,
             displayName: newAdmin.rows[0].display_name,
             chainId: null,
+            chainIds: [],
             bootstrapped: true
           });
         }
       }
 
       // INVITE: Check if there's a pending invite for this email
+      console.log(`   🔍 Checking for pending invite for: ${userEmail}`);
       const invite = await query(
-        'SELECT invite_id, email, is_super_admin, chain_id FROM admin_invites WHERE LOWER(email) = LOWER($1) AND accepted_at IS NULL',
+        `SELECT invite_id, email, is_super_admin, chain_id,
+                COALESCE(chain_ids, CASE WHEN chain_id IS NOT NULL THEN ARRAY[chain_id] ELSE '{}' END) as chain_ids
+         FROM admin_invites
+         WHERE LOWER(email) = LOWER($1) AND accepted_at IS NULL`,
         [userEmail]
       );
 
+      console.log(`   📧 Found ${invite.rows.length} pending invite(s)`);
+
       if (invite.rows.length > 0) {
         const pendingInvite = invite.rows[0];
+        const chainIds = pendingInvite.chain_ids || [];
+        console.log(`   ✅ Found pending invite: ${pendingInvite.email} (super: ${pendingInvite.is_super_admin}, chains: ${chainIds})`);
 
-        // Create the admin user from the invite
-        const newAdmin = await query(
+        // Create the admin user from the invite (use ON CONFLICT to handle race conditions)
+        await query(
           `INSERT INTO admin_users (firebase_uid, email, display_name, is_super_admin, chain_id)
            VALUES ($1, $2, $3, $4, $5)
-           RETURNING user_id, email, display_name, is_super_admin, chain_id`,
-          [firebaseUid, userEmail, null, pendingInvite.is_super_admin, pendingInvite.chain_id]
+           ON CONFLICT (firebase_uid) DO NOTHING`,
+          [firebaseUid, userEmail, null, pendingInvite.is_super_admin, chainIds[0] || null]
         );
 
-        // Mark invite as accepted
+        // Fetch the admin user (either just created or already existed)
+        const newAdminResult = await query(
+          'SELECT user_id, email, display_name, is_super_admin, chain_id FROM admin_users WHERE firebase_uid = $1',
+          [firebaseUid]
+        );
+
+        if (newAdminResult.rows.length === 0) {
+          console.log('   ❌ Failed to create or find admin user');
+          return res.status(500).json({ error: 'Failed to create admin user' });
+        }
+
+        const newAdmin = newAdminResult.rows[0];
+
+        // Create chain assignments for all chains (ON CONFLICT handles duplicates)
+        if (chainIds.length > 0) {
+          for (const chainId of chainIds) {
+            await query(
+              'INSERT INTO admin_chain_assignments (user_id, chain_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+              [newAdmin.user_id, chainId]
+            );
+          }
+        }
+
+        // Mark invite as accepted (only if not already accepted)
         await query(
-          'UPDATE admin_invites SET accepted_at = CURRENT_TIMESTAMP WHERE invite_id = $1',
+          'UPDATE admin_invites SET accepted_at = CURRENT_TIMESTAMP WHERE invite_id = $1 AND accepted_at IS NULL',
           [pendingInvite.invite_id]
         );
 
-        console.log(`✅ Invite accepted: ${userEmail} is now an admin`);
+        console.log(`   🎉 Invite accepted: ${userEmail} is now an admin (super: ${newAdmin.is_super_admin}, chains: ${chainIds})`);
         return res.json({
           isAdmin: true,
-          isSuperAdmin: newAdmin.rows[0].is_super_admin,
-          userId: newAdmin.rows[0].user_id,
-          email: newAdmin.rows[0].email,
-          displayName: newAdmin.rows[0].display_name,
-          chainId: newAdmin.rows[0].chain_id,
+          isSuperAdmin: newAdmin.is_super_admin,
+          userId: newAdmin.user_id,
+          email: newAdmin.email,
+          displayName: newAdmin.display_name,
+          chainId: newAdmin.chain_id,
+          chainIds: chainIds,
           inviteAccepted: true
         });
+      } else {
+        console.log(`   ⚠️ No pending invite found for ${userEmail}`);
       }
+    } else {
+      console.log('   ⚠️ No email header provided, cannot check for invites');
     }
 
     // No admin record, no bootstrap, no invite
+    console.log('   ❌ User is not an admin');
     return res.json({ isAdmin: false, isSuperAdmin: false });
   } catch (error) {
     console.error('Error checking admin status:', error);
@@ -154,35 +275,59 @@ router.get('/me', async (req, res) => {
 // DASHBOARD
 // ============================================
 
-router.get('/dashboard', requireSuperAdmin, async (req, res) => {
+router.get('/dashboard', requireAdmin, async (req, res) => {
   try {
-    // Get total chains count
+    const { is_super_admin, chain_id, chain_ids } = req.adminUser;
+
+    // Chain admins only see their assigned chains' data
+    let chainFilter = '';
+    let storeChainFilter = '';
+    let productChainFilter = '';
+    let params = [];
+
+    if (!is_super_admin && chain_ids && chain_ids.length > 0) {
+      params = [chain_ids];
+      chainFilter = 'AND c.chain_id = ANY($1)';
+      storeChainFilter = 'AND s.chain_id = ANY($1)';
+      productChainFilter = 'AND p.chain_id = ANY($1)';
+    }
+
+    // Get chains count (for chain admin, this will be 1)
     const chainsResult = await query(
-      'SELECT COUNT(*) FROM chains WHERE is_active = true'
+      `SELECT COUNT(*) FROM chains c WHERE is_active = true ${chainFilter}`,
+      params
     );
     const totalChains = parseInt(chainsResult.rows[0].count);
 
-    // Get total stores count
+    // Get stores count
     const storesResult = await query(
-      'SELECT COUNT(*) FROM stores WHERE is_active = true'
+      `SELECT COUNT(*) FROM stores s WHERE is_active = true ${storeChainFilter}`,
+      params
     );
     const totalStores = parseInt(storesResult.rows[0].count);
 
-    // Get total products count
-    const productsResult = await query('SELECT COUNT(*) FROM products');
+    // Get products count
+    const productsResult = await query(
+      `SELECT COUNT(*) FROM products p WHERE 1=1 ${productChainFilter}`,
+      params
+    );
     const totalProducts = parseInt(productsResult.rows[0].count);
 
-    // Get total admin users count
-    const adminsResult = await query('SELECT COUNT(*) FROM admin_users');
-    const totalAdmins = parseInt(adminsResult.rows[0].count);
+    // Get admin users count (only super admins see this)
+    let totalAdmins = 0;
+    if (is_super_admin) {
+      const adminsResult = await query('SELECT COUNT(*) FROM admin_users');
+      totalAdmins = parseInt(adminsResult.rows[0].count);
+    }
 
     // Get recently created chains
     const recentChainsResult = await query(
       `SELECT chain_id, chain_name, created_at
-       FROM chains
-       WHERE is_active = true
+       FROM chains c
+       WHERE is_active = true ${chainFilter}
        ORDER BY created_at DESC
-       LIMIT 5`
+       LIMIT 5`,
+      params
     );
 
     // Get recently created stores
@@ -190,9 +335,10 @@ router.get('/dashboard', requireSuperAdmin, async (req, res) => {
       `SELECT s.store_id, s.store_name, s.created_at, c.chain_name
        FROM stores s
        JOIN chains c ON s.chain_id = c.chain_id
-       WHERE s.is_active = true
+       WHERE s.is_active = true ${storeChainFilter}
        ORDER BY s.created_at DESC
-       LIMIT 5`
+       LIMIT 5`,
+      params
     );
 
     // Get chains with store counts
@@ -200,10 +346,11 @@ router.get('/dashboard', requireSuperAdmin, async (req, res) => {
       `SELECT c.chain_id, c.chain_name, COUNT(s.store_id) as store_count
        FROM chains c
        LEFT JOIN stores s ON c.chain_id = s.chain_id AND s.is_active = true
-       WHERE c.is_active = true
+       WHERE c.is_active = true ${chainFilter}
        GROUP BY c.chain_id, c.chain_name
        ORDER BY store_count DESC
-       LIMIT 5`
+       LIMIT 5`,
+      params
     );
 
     res.json({
@@ -215,10 +362,15 @@ router.get('/dashboard', requireSuperAdmin, async (req, res) => {
       },
       recentChains: recentChainsResult.rows,
       recentStores: recentStoresResult.rows,
-      topChains: chainStoreCountsResult.rows
+      topChains: chainStoreCountsResult.rows,
+      // Include admin info for frontend to adapt UI
+      adminInfo: {
+        isSuperAdmin: is_super_admin,
+        chainId: chain_id
+      }
     });
   } catch (error) {
-    console.error('Error fetching super admin dashboard:', error);
+    console.error('Error fetching admin dashboard:', error);
     res.status(500).json({ error: 'Failed to fetch dashboard data', details: error.message });
   }
 });
@@ -227,21 +379,36 @@ router.get('/dashboard', requireSuperAdmin, async (req, res) => {
 // CHAINS CRUD
 // ============================================
 
-// Get all chains with stats
-router.get('/chains', requireSuperAdmin, async (req, res) => {
+// Get all chains with stats (chain admins only see their assigned chains)
+router.get('/chains', requireAdmin, async (req, res) => {
   try {
     const { page = 1, limit = 50, search = '', includeInactive = 'false' } = req.query;
+    const { is_super_admin, chain_ids: adminChainIds } = req.adminUser;
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
-    let whereClause = includeInactive === 'true' ? '' : 'WHERE c.is_active = true';
     const params = [];
+    const conditions = [];
+
+    // Chain admins can only see their assigned chains
+    if (!is_super_admin && adminChainIds && adminChainIds.length > 0) {
+      params.push(adminChainIds);
+      conditions.push(`c.chain_id = ANY($${params.length})`);
+    }
+
+    // When includeInactive is true, show ONLY inactive items
+    // When false (default), show only active items
+    if (includeInactive === 'true') {
+      conditions.push('c.is_active = false');
+    } else {
+      conditions.push('c.is_active = true');
+    }
 
     if (search) {
-      whereClause = whereClause
-        ? `${whereClause} AND LOWER(c.chain_name) LIKE $1`
-        : 'WHERE LOWER(c.chain_name) LIKE $1';
       params.push(`%${search.toLowerCase()}%`);
+      conditions.push(`LOWER(c.chain_name) LIKE $${params.length}`);
     }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const chainsResult = await query(
       `SELECT
@@ -261,11 +428,28 @@ router.get('/chains', requireSuperAdmin, async (req, res) => {
       [...params, parseInt(limit), offset]
     );
 
-    // Get total count
-    const countParams = search ? [`%${search.toLowerCase()}%`] : [];
-    const countWhere = includeInactive === 'true'
-      ? (search ? 'WHERE LOWER(chain_name) LIKE $1' : '')
-      : (search ? 'WHERE is_active = true AND LOWER(chain_name) LIKE $1' : 'WHERE is_active = true');
+    // Get total count with same filters
+    const countParams = [];
+    const countConditions = [];
+
+    if (!is_super_admin && adminChainIds && adminChainIds.length > 0) {
+      countParams.push(adminChainIds);
+      countConditions.push(`chain_id = ANY($${countParams.length})`);
+    }
+
+    // Match the same logic as above
+    if (includeInactive === 'true') {
+      countConditions.push('is_active = false');
+    } else {
+      countConditions.push('is_active = true');
+    }
+
+    if (search) {
+      countParams.push(`%${search.toLowerCase()}%`);
+      countConditions.push(`LOWER(chain_name) LIKE $${countParams.length}`);
+    }
+
+    const countWhere = countConditions.length > 0 ? `WHERE ${countConditions.join(' AND ')}` : '';
 
     const countResult = await query(
       `SELECT COUNT(*) FROM chains ${countWhere}`,
@@ -288,8 +472,8 @@ router.get('/chains', requireSuperAdmin, async (req, res) => {
   }
 });
 
-// Get single chain
-router.get('/chains/:id', requireSuperAdmin, async (req, res) => {
+// Get single chain (chain admins can only view their chain)
+router.get('/chains/:id', requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -450,22 +634,38 @@ router.post('/chains/:id/restore', requireSuperAdmin, async (req, res) => {
 // STORES CRUD
 // ============================================
 
-// Get stores (optionally by chain)
-router.get('/stores', requireSuperAdmin, async (req, res) => {
+// Get stores (chain admins only see stores in their assigned chains)
+router.get('/stores', requireAdmin, async (req, res) => {
   try {
     const { page = 1, limit = 50, search = '', chainId, includeInactive = 'false' } = req.query;
+    const { is_super_admin, chain_ids: adminChainIds } = req.adminUser;
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     const params = [];
     const conditions = [];
 
-    if (includeInactive !== 'true') {
-      conditions.push('s.is_active = true');
+    // Chain admins can only see stores in their assigned chains
+    if (!is_super_admin && adminChainIds && adminChainIds.length > 0) {
+      params.push(adminChainIds);
+      conditions.push(`s.chain_id = ANY($${params.length})`);
+
+      // If chainId filter is provided, it must be one of the admin's chains
+      if (chainId) {
+        params.push(parseInt(chainId));
+        conditions.push(`s.chain_id = $${params.length}`);
+      }
+    } else if (chainId) {
+      // Super admins can filter by any chain
+      params.push(parseInt(chainId));
+      conditions.push(`s.chain_id = $${params.length}`);
     }
 
-    if (chainId) {
-      params.push(chainId);
-      conditions.push(`s.chain_id = $${params.length}`);
+    // When includeInactive is true, show ONLY inactive items
+    // When false (default), show only active items
+    if (includeInactive === 'true') {
+      conditions.push('s.is_active = false');
+    } else {
+      conditions.push('s.is_active = true');
     }
 
     if (search) {
@@ -503,17 +703,28 @@ router.get('/stores', requireSuperAdmin, async (req, res) => {
       [...params, parseInt(limit), offset]
     );
 
-    // Get total count
+    // Get total count with same filters
     const countConditions = [];
     const countParams = [];
 
-    if (includeInactive !== 'true') {
-      countConditions.push('is_active = true');
+    if (!is_super_admin && adminChainIds && adminChainIds.length > 0) {
+      countParams.push(adminChainIds);
+      countConditions.push(`chain_id = ANY($${countParams.length})`);
+
+      if (chainId) {
+        countParams.push(parseInt(chainId));
+        countConditions.push(`chain_id = $${countParams.length}`);
+      }
+    } else if (chainId) {
+      countParams.push(parseInt(chainId));
+      countConditions.push(`chain_id = $${countParams.length}`);
     }
 
-    if (chainId) {
-      countParams.push(chainId);
-      countConditions.push(`chain_id = $${countParams.length}`);
+    // Match the same logic as above
+    if (includeInactive === 'true') {
+      countConditions.push('is_active = false');
+    } else {
+      countConditions.push('is_active = true');
     }
 
     if (search) {
@@ -544,11 +755,17 @@ router.get('/stores', requireSuperAdmin, async (req, res) => {
   }
 });
 
-// Get stores by chain ID
-router.get('/chains/:chainId/stores', requireSuperAdmin, async (req, res) => {
+// Get stores by chain ID (chain admins can only access their chain)
+router.get('/chains/:chainId/stores', requireAdmin, async (req, res) => {
   try {
     const { chainId } = req.params;
     const { includeInactive = 'false' } = req.query;
+    const { is_super_admin, chain_id: adminChainId } = req.adminUser;
+
+    // Chain admins can only access their own chain
+    if (!is_super_admin && adminChainId && parseInt(chainId) !== adminChainId) {
+      return res.status(403).json({ error: 'Access denied. You can only view stores in your assigned chain.' });
+    }
 
     const whereClause = includeInactive === 'true'
       ? 'WHERE s.chain_id = $1'
@@ -580,8 +797,8 @@ router.get('/chains/:chainId/stores', requireSuperAdmin, async (req, res) => {
   }
 });
 
-// Get single store
-router.get('/stores/:id', requireSuperAdmin, async (req, res) => {
+// Get single store (chain admins can only access stores in their chain)
+router.get('/stores/:id', requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -768,7 +985,7 @@ router.post('/stores/:id/restore', requireSuperAdmin, async (req, res) => {
 // ADMIN USERS MANAGEMENT
 // ============================================
 
-// Get all admin users
+// Get all admin users (with multi-chain support)
 router.get('/admins', requireSuperAdmin, async (req, res) => {
   try {
     const result = await query(
@@ -781,7 +998,17 @@ router.get('/admins', requireSuperAdmin, async (req, res) => {
         au.chain_id,
         au.created_at,
         au.last_login,
-        c.chain_name
+        c.chain_name,
+        COALESCE(
+          (SELECT array_agg(aca.chain_id) FROM admin_chain_assignments aca WHERE aca.user_id = au.user_id),
+          '{}'
+        ) as chain_ids,
+        COALESCE(
+          (SELECT array_agg(ch.chain_name) FROM admin_chain_assignments aca2
+           JOIN chains ch ON aca2.chain_id = ch.chain_id
+           WHERE aca2.user_id = au.user_id),
+          '{}'
+        ) as chain_names
        FROM admin_users au
        LEFT JOIN chains c ON au.chain_id = c.chain_id
        ORDER BY au.created_at DESC`
@@ -825,28 +1052,101 @@ router.post('/admins', requireSuperAdmin, async (req, res) => {
   }
 });
 
-// Update admin user
+// Update admin user (with multi-chain support)
 router.put('/admins/:id', requireSuperAdmin, async (req, res) => {
+  const client = await pool.connect();
   try {
     const { id } = req.params;
-    const { display_name, is_super_admin, chain_id } = req.body;
+    const { display_name, is_super_admin, chain_id, chain_ids } = req.body;
 
-    const result = await query(
+    await client.query('BEGIN');
+
+    // Support both chain_id (legacy) and chain_ids (new)
+    let chainIdsArray = chain_ids || [];
+    if (chain_id && !chainIdsArray.includes(chain_id)) {
+      chainIdsArray = [chain_id, ...chainIdsArray];
+    }
+
+    // Clear chain assignments for super admins
+    if (is_super_admin) {
+      chainIdsArray = [];
+    }
+
+    // Validate chain_ids if not super admin
+    if (!is_super_admin && chainIdsArray.length > 0) {
+      const chainCheck = await client.query(
+        'SELECT chain_id FROM chains WHERE chain_id = ANY($1) AND is_active = true',
+        [chainIdsArray]
+      );
+      if (chainCheck.rows.length !== chainIdsArray.length) {
+        await client.query('ROLLBACK');
+        return res.status(400).json({ error: 'One or more invalid or inactive chains' });
+      }
+    }
+
+    // Update the admin user
+    const result = await client.query(
       `UPDATE admin_users
        SET display_name = $1, is_super_admin = $2, chain_id = $3
        WHERE user_id = $4
        RETURNING user_id, firebase_uid, email, display_name, is_super_admin, chain_id, created_at`,
-      [display_name || null, is_super_admin || false, chain_id || null, id]
+      [display_name || null, is_super_admin || false, chainIdsArray[0] || null, id]
     );
 
     if (result.rows.length === 0) {
+      await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Admin user not found' });
     }
 
-    res.json(result.rows[0]);
+    // Update chain assignments - delete existing and insert new
+    await client.query(
+      'DELETE FROM admin_chain_assignments WHERE user_id = $1',
+      [id]
+    );
+
+    if (chainIdsArray.length > 0) {
+      for (const chainId of chainIdsArray) {
+        await client.query(
+          'INSERT INTO admin_chain_assignments (user_id, chain_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+          [id, chainId]
+        );
+      }
+    }
+
+    await client.query('COMMIT');
+
+    // Return the updated admin with chain info
+    const adminResult = await query(
+      `SELECT
+        au.user_id,
+        au.firebase_uid,
+        au.email,
+        au.display_name,
+        au.is_super_admin,
+        au.chain_id,
+        au.created_at,
+        COALESCE(
+          (SELECT array_agg(aca.chain_id) FROM admin_chain_assignments aca WHERE aca.user_id = au.user_id),
+          '{}'
+        ) as chain_ids,
+        COALESCE(
+          (SELECT array_agg(ch.chain_name) FROM admin_chain_assignments aca2
+           JOIN chains ch ON aca2.chain_id = ch.chain_id
+           WHERE aca2.user_id = au.user_id),
+          '{}'
+        ) as chain_names
+       FROM admin_users au
+       WHERE au.user_id = $1`,
+      [id]
+    );
+
+    res.json(adminResult.rows[0]);
   } catch (error) {
+    await client.query('ROLLBACK');
     console.error('Error updating admin user:', error);
     res.status(500).json({ error: 'Failed to update admin user', details: error.message });
+  } finally {
+    client.release();
   }
 });
 
@@ -927,16 +1227,22 @@ router.get('/invites', requireSuperAdmin, async (req, res) => {
   }
 });
 
-// Create invite
+// Create invite (supports multiple chain assignments)
 router.post('/invites', requireSuperAdmin, async (req, res) => {
   try {
-    const { email, is_super_admin, chain_id } = req.body;
+    const { email, is_super_admin, chain_id, chain_ids } = req.body;
 
     if (!email || !email.trim()) {
       return res.status(400).json({ error: 'Email is required' });
     }
 
     const normalizedEmail = email.trim().toLowerCase();
+
+    // Support both chain_id (legacy) and chain_ids (new)
+    let chainIdsArray = chain_ids || [];
+    if (chain_id && !chainIdsArray.includes(chain_id)) {
+      chainIdsArray = [chain_id, ...chainIdsArray];
+    }
 
     // Check if email is already an admin
     const existingAdmin = await query(
@@ -961,22 +1267,28 @@ router.post('/invites', requireSuperAdmin, async (req, res) => {
       return res.status(400).json({ error: 'An invite for this email already exists' });
     }
 
-    // Validate chain_id if not super admin
-    if (!is_super_admin && chain_id) {
+    // Validate chain_ids if not super admin
+    if (!is_super_admin && chainIdsArray.length > 0) {
       const chainCheck = await query(
-        'SELECT chain_id FROM chains WHERE chain_id = $1 AND is_active = true',
-        [chain_id]
+        'SELECT chain_id FROM chains WHERE chain_id = ANY($1) AND is_active = true',
+        [chainIdsArray]
       );
-      if (chainCheck.rows.length === 0) {
-        return res.status(400).json({ error: 'Invalid or inactive chain' });
+      if (chainCheck.rows.length !== chainIdsArray.length) {
+        return res.status(400).json({ error: 'One or more invalid or inactive chains' });
       }
     }
 
     const result = await query(
-      `INSERT INTO admin_invites (email, is_super_admin, chain_id, invited_by)
-       VALUES ($1, $2, $3, $4)
-       RETURNING invite_id, email, is_super_admin, chain_id, created_at`,
-      [normalizedEmail, is_super_admin || false, is_super_admin ? null : (chain_id || null), req.adminUser.user_id]
+      `INSERT INTO admin_invites (email, is_super_admin, chain_id, chain_ids, invited_by)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING invite_id, email, is_super_admin, chain_id, chain_ids, created_at`,
+      [
+        normalizedEmail,
+        is_super_admin || false,
+        is_super_admin ? null : (chainIdsArray[0] || null), // Legacy single chain
+        is_super_admin ? '{}' : chainIdsArray, // New multi-chain array
+        req.adminUser.user_id
+      ]
     );
 
     res.status(201).json(result.rows[0]);

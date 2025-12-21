@@ -19,13 +19,6 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import {
   Table,
   TableBody,
   TableCell,
@@ -66,19 +59,19 @@ import { toast } from 'sonner';
 interface InviteFormData {
   email: string;
   is_super_admin: boolean;
-  chain_id: string;
+  chain_ids: number[];
 }
 
 interface EditFormData {
   display_name: string;
   is_super_admin: boolean;
-  chain_id: string;
+  chain_ids: number[];
 }
 
 const emptyInviteFormData: InviteFormData = {
   email: '',
   is_super_admin: false,
-  chain_id: '',
+  chain_ids: [],
 };
 
 const AdminManagement = () => {
@@ -95,7 +88,7 @@ const AdminManagement = () => {
   const [selectedAdmin, setSelectedAdmin] = useState<AdminUser | null>(null);
   const [selectedInvite, setSelectedInvite] = useState<AdminInvite | null>(null);
   const [inviteFormData, setInviteFormData] = useState<InviteFormData>(emptyInviteFormData);
-  const [editFormData, setEditFormData] = useState<EditFormData>({ display_name: '', is_super_admin: false, chain_id: '' });
+  const [editFormData, setEditFormData] = useState<EditFormData>({ display_name: '', is_super_admin: false, chain_ids: [] });
   const [submitting, setSubmitting] = useState(false);
 
   const fetchData = async () => {
@@ -126,8 +119,8 @@ const AdminManagement = () => {
       toast.error('Email is required');
       return;
     }
-    if (!inviteFormData.is_super_admin && !inviteFormData.chain_id) {
-      toast.error('Please select a chain for non-super-admin users');
+    if (!inviteFormData.is_super_admin && inviteFormData.chain_ids.length === 0) {
+      toast.error('Please select at least one chain for non-super-admin users');
       return;
     }
 
@@ -137,7 +130,7 @@ const AdminManagement = () => {
       await createAdminInvite({
         email: inviteFormData.email,
         is_super_admin: inviteFormData.is_super_admin,
-        chain_id: inviteFormData.is_super_admin ? undefined : parseInt(inviteFormData.chain_id),
+        chain_ids: inviteFormData.is_super_admin ? undefined : inviteFormData.chain_ids,
       });
 
       // Step 2: Send magic link via Firebase
@@ -162,8 +155,8 @@ const AdminManagement = () => {
   const handleUpdate = async () => {
     if (!selectedAdmin) return;
 
-    if (!editFormData.is_super_admin && !editFormData.chain_id) {
-      toast.error('Please select a chain for non-super-admin users');
+    if (!editFormData.is_super_admin && editFormData.chain_ids.length === 0) {
+      toast.error('Please select at least one chain for non-super-admin users');
       return;
     }
 
@@ -172,7 +165,7 @@ const AdminManagement = () => {
       await updateAdminUser(selectedAdmin.user_id, {
         display_name: editFormData.display_name || undefined,
         is_super_admin: editFormData.is_super_admin,
-        chain_id: editFormData.is_super_admin ? null : (editFormData.chain_id ? parseInt(editFormData.chain_id) : null),
+        chain_ids: editFormData.is_super_admin ? [] : editFormData.chain_ids,
       });
       toast.success('Admin user updated successfully');
       setShowEditDialog(false);
@@ -224,7 +217,7 @@ const AdminManagement = () => {
     setEditFormData({
       display_name: admin.display_name || '',
       is_super_admin: admin.is_super_admin,
-      chain_id: admin.chain_id?.toString() || '',
+      chain_ids: admin.chain_ids || (admin.chain_id ? [admin.chain_id] : []),
     });
     setShowEditDialog(true);
   };
@@ -395,6 +388,20 @@ const AdminManagement = () => {
                     <TableCell className="text-slate-400">
                       {admin.is_super_admin ? (
                         <span className="text-slate-500">All chains</span>
+                      ) : admin.chain_names && admin.chain_names.length > 0 ? (
+                        <div className="flex flex-wrap items-center gap-1">
+                          <Building2 className="h-3 w-3 flex-shrink-0" />
+                          <span className="text-sm">
+                            {admin.chain_names.length === 1
+                              ? admin.chain_names[0]
+                              : `${admin.chain_names.length} chains`}
+                          </span>
+                          {admin.chain_names.length > 1 && (
+                            <span className="text-xs text-slate-500 block w-full ml-4">
+                              {admin.chain_names.join(', ')}
+                            </span>
+                          )}
+                        </div>
                       ) : admin.chain_name ? (
                         <div className="flex items-center gap-1">
                           <Building2 className="h-3 w-3" />
@@ -479,7 +486,7 @@ const AdminManagement = () => {
                 id="is-super-admin"
                 checked={inviteFormData.is_super_admin}
                 onCheckedChange={(checked) =>
-                  setInviteFormData({ ...inviteFormData, is_super_admin: checked as boolean, chain_id: '' })
+                  setInviteFormData({ ...inviteFormData, is_super_admin: checked as boolean, chain_ids: [] })
                 }
                 className="border-gray-600 data-[state=checked]:bg-blue-500 data-[state=checked]:border-blue-500"
                 disabled={submitting}
@@ -490,23 +497,47 @@ const AdminManagement = () => {
             </div>
             {!inviteFormData.is_super_admin && (
               <div className="space-y-2">
-                <Label className="text-slate-300">Assign to Chain *</Label>
-                <Select
-                  value={inviteFormData.chain_id}
-                  onValueChange={(value) => setInviteFormData({ ...inviteFormData, chain_id: value })}
-                  disabled={submitting}
-                >
-                  <SelectTrigger className="bg-gray-800 border-gray-600 text-slate-100">
-                    <SelectValue placeholder="Select a chain" />
-                  </SelectTrigger>
-                  <SelectContent className="bg-gray-900 border-gray-700 text-slate-100">
-                    {chains.map((chain) => (
-                      <SelectItem key={chain.chain_id} value={chain.chain_id.toString()}>
-                        {chain.chain_name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Label className="text-slate-300">Assign to Chain(s) *</Label>
+                <div className="space-y-2 max-h-48 overflow-y-auto p-3 bg-gray-800 rounded-lg border border-gray-600">
+                  {chains.length === 0 ? (
+                    <p className="text-sm text-slate-500">No chains available</p>
+                  ) : (
+                    chains.map((chain) => (
+                      <div key={chain.chain_id} className="flex items-center space-x-2">
+                        <Checkbox
+                          id={`invite-chain-${chain.chain_id}`}
+                          checked={inviteFormData.chain_ids.includes(chain.chain_id)}
+                          onCheckedChange={(checked) => {
+                            if (checked) {
+                              setInviteFormData({
+                                ...inviteFormData,
+                                chain_ids: [...inviteFormData.chain_ids, chain.chain_id],
+                              });
+                            } else {
+                              setInviteFormData({
+                                ...inviteFormData,
+                                chain_ids: inviteFormData.chain_ids.filter((id) => id !== chain.chain_id),
+                              });
+                            }
+                          }}
+                          className="border-gray-500 data-[state=checked]:bg-blue-500 data-[state=checked]:border-blue-500"
+                          disabled={submitting}
+                        />
+                        <Label
+                          htmlFor={`invite-chain-${chain.chain_id}`}
+                          className="text-slate-300 cursor-pointer text-sm"
+                        >
+                          {chain.chain_name}
+                        </Label>
+                      </div>
+                    ))
+                  )}
+                </div>
+                {inviteFormData.chain_ids.length > 0 && (
+                  <p className="text-xs text-slate-500">
+                    {inviteFormData.chain_ids.length} chain{inviteFormData.chain_ids.length > 1 ? 's' : ''} selected
+                  </p>
+                )}
               </div>
             )}
           </div>
@@ -571,7 +602,7 @@ const AdminManagement = () => {
                 id="edit-is-super-admin"
                 checked={editFormData.is_super_admin}
                 onCheckedChange={(checked) =>
-                  setEditFormData({ ...editFormData, is_super_admin: checked as boolean, chain_id: '' })
+                  setEditFormData({ ...editFormData, is_super_admin: checked as boolean, chain_ids: [] })
                 }
                 className="border-gray-600 data-[state=checked]:bg-blue-500 data-[state=checked]:border-blue-500"
                 disabled={submitting}
@@ -582,23 +613,47 @@ const AdminManagement = () => {
             </div>
             {!editFormData.is_super_admin && (
               <div className="space-y-2">
-                <Label className="text-slate-300">Assign to Chain *</Label>
-                <Select
-                  value={editFormData.chain_id}
-                  onValueChange={(value) => setEditFormData({ ...editFormData, chain_id: value })}
-                  disabled={submitting}
-                >
-                  <SelectTrigger className="bg-gray-800 border-gray-600 text-slate-100">
-                    <SelectValue placeholder="Select a chain" />
-                  </SelectTrigger>
-                  <SelectContent className="bg-gray-900 border-gray-700 text-slate-100">
-                    {chains.map((chain) => (
-                      <SelectItem key={chain.chain_id} value={chain.chain_id.toString()}>
-                        {chain.chain_name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Label className="text-slate-300">Assign to Chain(s) *</Label>
+                <div className="space-y-2 max-h-48 overflow-y-auto p-3 bg-gray-800 rounded-lg border border-gray-600">
+                  {chains.length === 0 ? (
+                    <p className="text-sm text-slate-500">No chains available</p>
+                  ) : (
+                    chains.map((chain) => (
+                      <div key={chain.chain_id} className="flex items-center space-x-2">
+                        <Checkbox
+                          id={`edit-chain-${chain.chain_id}`}
+                          checked={editFormData.chain_ids.includes(chain.chain_id)}
+                          onCheckedChange={(checked) => {
+                            if (checked) {
+                              setEditFormData({
+                                ...editFormData,
+                                chain_ids: [...editFormData.chain_ids, chain.chain_id],
+                              });
+                            } else {
+                              setEditFormData({
+                                ...editFormData,
+                                chain_ids: editFormData.chain_ids.filter((id) => id !== chain.chain_id),
+                              });
+                            }
+                          }}
+                          className="border-gray-500 data-[state=checked]:bg-blue-500 data-[state=checked]:border-blue-500"
+                          disabled={submitting}
+                        />
+                        <Label
+                          htmlFor={`edit-chain-${chain.chain_id}`}
+                          className="text-slate-300 cursor-pointer text-sm"
+                        >
+                          {chain.chain_name}
+                        </Label>
+                      </div>
+                    ))
+                  )}
+                </div>
+                {editFormData.chain_ids.length > 0 && (
+                  <p className="text-xs text-slate-500">
+                    {editFormData.chain_ids.length} chain{editFormData.chain_ids.length > 1 ? 's' : ''} selected
+                  </p>
+                )}
               </div>
             )}
           </div>

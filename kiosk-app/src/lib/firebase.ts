@@ -12,6 +12,7 @@ import {
   sendSignInLinkToEmail,
   isSignInWithEmailLink,
   signInWithEmailLink,
+  updatePassword as firebaseUpdatePassword,
   type User
 } from 'firebase/auth';
 import type { FirebaseApp } from 'firebase/app';
@@ -148,6 +149,19 @@ export const resetPassword = async (email: string) => {
     await sendPasswordResetEmail(auth, email);
   } catch (error: any) {
     console.error('Error sending password reset email:', error);
+    throw error;
+  }
+};
+
+// Update password for current user (used after magic link sign-in)
+export const updatePassword = async (newPassword: string) => {
+  if (!auth || !auth.currentUser) {
+    throw new Error('No user is currently signed in.');
+  }
+  try {
+    await firebaseUpdatePassword(auth.currentUser, newPassword);
+  } catch (error: any) {
+    console.error('Error updating password:', error);
     throw error;
   }
 };

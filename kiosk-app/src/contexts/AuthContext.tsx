@@ -201,10 +201,29 @@ export const ProtectedRoute = ({ children }: ProtectedRouteProps) => {
   return <>{children}</>;
 };
 
-// Super Admin Route component
+// Super Admin Route component - allows any authenticated admin
 export const SuperAdminRoute = ({ children }: ProtectedRouteProps) => {
-  const { user, loading, isSuperAdmin, adminRole } = useAuth();
+  const { user, loading, isAdmin, adminRole, signOut, refreshAdminRole } = useAuth();
   const location = useLocation();
+  const [retrying, setRetrying] = useState(false);
+
+  const handleRetry = async () => {
+    setRetrying(true);
+    try {
+      await refreshAdminRole();
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      await signOut();
+      window.location.href = '/super-admin/login';
+    } catch (error) {
+      console.error('Sign out error:', error);
+    }
+  };
 
   if (loading) {
     return (
@@ -222,8 +241,9 @@ export const SuperAdminRoute = ({ children }: ProtectedRouteProps) => {
     return <Navigate to="/super-admin/login" state={{ from: location }} replace />;
   }
 
-  if (!isSuperAdmin) {
-    // User is logged in but not a super admin - show access denied
+  // Check if user is any kind of admin (super admin or chain admin)
+  if (!isAdmin) {
+    // User is logged in but not an admin - show access denied
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-4 text-center p-6">
@@ -245,12 +265,32 @@ export const SuperAdminRoute = ({ children }: ProtectedRouteProps) => {
           </div>
           <h1 className="text-2xl font-bold">Access Denied</h1>
           <p className="text-muted-foreground max-w-md">
-            You don't have permission to access the super admin panel.
+            You don't have permission to access the admin panel.
             Please contact your administrator if you believe this is an error.
           </p>
+          {user?.email && (
+            <p className="text-sm text-muted-foreground">
+              Signed in as: {user.email}
+            </p>
+          )}
+          <div className="flex gap-3 mt-4">
+            <button
+              onClick={handleRetry}
+              disabled={retrying}
+              className="px-4 py-2 rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+            >
+              {retrying ? 'Checking...' : 'Check Access Again'}
+            </button>
+            <button
+              onClick={handleSignOut}
+              className="px-4 py-2 rounded-md border border-input hover:bg-accent hover:text-accent-foreground"
+            >
+              Sign Out
+            </button>
+          </div>
           <a
             href="/"
-            className="mt-4 text-primary hover:underline"
+            className="mt-2 text-sm text-muted-foreground hover:underline"
           >
             Return to Home
           </a>
