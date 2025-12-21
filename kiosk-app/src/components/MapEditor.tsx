@@ -19,6 +19,7 @@ import type { MapElement, Tool, ElementType, AnimationStyle, StrokeStyle } from 
 // Note: ContextualToolbar removed - properties now shown in header bar
 import { defaultElement, defaultSizes, defaultSmartPin, defaultStaticPin, defaultDevicePin, CANVAS_WIDTH, CANVAS_HEIGHT, calculateFitToViewScale, animationStyleLabels, getStrokeDash } from './map-editor/types';
 import { getGradientProps } from './map-editor/GradientEditor';
+import { auth } from '@/lib/firebase';
 
 interface MapEditorProps {
     storeId: number;
@@ -26,6 +27,18 @@ interface MapEditorProps {
 }
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+
+// Helper to get auth headers for API calls
+const getAuthHeaders = (): Record<string, string> => {
+  const user = auth?.currentUser;
+  if (!user) {
+    return {};
+  }
+  return {
+    'x-firebase-uid': user.uid,
+    'x-firebase-email': user.email || '',
+  };
+};
 
 const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     const [mode, setMode] = useState<'builder'>('builder');
@@ -385,7 +398,9 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     // Fetch publish status
     const fetchPublishStatus = useCallback(async () => {
         try {
-            const response = await fetch(`${API_URL}/api/admin/stores/${storeId}/map/status`);
+            const response = await fetch(`${API_URL}/api/admin/stores/${storeId}/map/status`, {
+                headers: getAuthHeaders()
+            });
             if (response.ok) {
                 const data = await response.json();
                 setPublishStatus(data);
@@ -414,7 +429,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 `${API_URL}/api/admin/stores/${storeId}/map/uploaded-images`,
                 {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
                     body: JSON.stringify({ uploadedImages: imagesToSave })
                 }
             );
@@ -426,14 +441,14 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             // Publish elements
             const response = await fetch(
                 `${API_URL}/api/admin/stores/${storeId}/map/publish`,
-                { method: 'POST' }
+                { method: 'POST', headers: getAuthHeaders() }
             );
 
             if (response.ok) {
                 // Also publish uploaded images
                 await fetch(
                     `${API_URL}/api/admin/stores/${storeId}/map/uploaded-images/publish`,
-                    { method: 'POST' }
+                    { method: 'POST', headers: getAuthHeaders() }
                 );
 
                 const data = await response.json();
@@ -689,7 +704,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 `${API_URL}/api/admin/stores/${storeId}/map/elements`,
                 {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
                     body: JSON.stringify({ elements: convertedElements })
                 }
             );
@@ -741,7 +756,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 `${API_URL}/api/admin/stores/${storeId}/map/element`,
                 {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
                     body: JSON.stringify({ element: convertedElement })
                 }
             );
@@ -779,7 +794,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 `${API_URL}/api/admin/stores/${storeId}/map/element/${dbId}`,
                 {
                     method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
                     body: JSON.stringify({ element: convertedElement })
                 }
             );
@@ -815,6 +830,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 `${API_URL}/api/admin/stores/${storeId}/map/element/${dbId}`,
                 {
                     method: 'DELETE',
+                    headers: getAuthHeaders()
                 }
             );
 
@@ -1050,7 +1066,9 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             // Try to load uploaded images from database first
             let imagesLoadedFromDb = false;
             try {
-                const dbImagesResponse = await fetch(`${API_URL}/api/admin/stores/${storeId}/map/uploaded-images`);
+                const dbImagesResponse = await fetch(`${API_URL}/api/admin/stores/${storeId}/map/uploaded-images`, {
+                    headers: getAuthHeaders()
+                });
                 if (dbImagesResponse.ok) {
                     const dbImagesData = await dbImagesResponse.json();
                     const savedImages = dbImagesData.uploadedImages;
@@ -1181,7 +1199,9 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 }
             }
 
-            const response = await fetch(`${API_URL}/api/admin/stores/${storeId}/map`);
+            const response = await fetch(`${API_URL}/api/admin/stores/${storeId}/map`, {
+                headers: getAuthHeaders()
+            });
             if (!response.ok) {
                 setMapImageUrl(null);
                 setMapImage(null);
@@ -1359,7 +1379,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         try {
             const response = await fetch(
                 `${API_URL}/api/admin/stores/${storeId}/map/image`,
-                { method: 'POST', body: formData }
+                { method: 'POST', body: formData, headers: getAuthHeaders() }
             );
 
             if (!response.ok) {
@@ -2721,7 +2741,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                 // Delete from backend (for each image)
                                 imagesToDelete.forEach(img => {
                                     if (img.url) {
-                                        fetch(`${API_URL}/api/admin/stores/${storeId}/map/image`, { method: 'DELETE' })
+                                        fetch(`${API_URL}/api/admin/stores/${storeId}/map/image`, { method: 'DELETE', headers: getAuthHeaders() })
                                             .catch(err => console.error('Failed to delete image from backend:', err));
                                     }
                                 });

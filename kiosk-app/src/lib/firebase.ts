@@ -66,8 +66,8 @@ if (isFirebaseConfigured() || useEmulator) {
     // Connect to Firebase Auth Emulator in development
     if (useEmulator) {
       connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
-      console.log('🔧 Firebase Auth Emulator connected at http://127.0.0.1:9099');
-      console.log('📊 Emulator UI available at http://127.0.0.1:4000');
+      // Disable app verification for emulator (fixes reCAPTCHA issues)
+      (auth as any).settings.appVerificationDisabledForTesting = true;
     } else {
       console.log('✅ Firebase initialized successfully (production mode)');
     }

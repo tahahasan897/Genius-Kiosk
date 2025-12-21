@@ -26,14 +26,14 @@ const SuperAdmin = () => {
     try {
       await signOut();
       toast.success('Signed out successfully');
-      navigate('/super-admin/login');
+      navigate('/team/login');
     } catch (error) {
       toast.error('Failed to sign out');
     }
   };
 
   // Get role display info
-  const roleLabel = isSuperAdmin ? 'Super Admin' : 'Chain Admin';
+  const roleLabel = 'Team Dashboard';
   const roleColor = isSuperAdmin ? 'bg-blue-500' : 'bg-cyan-500';
 
   return (

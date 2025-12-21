@@ -45,14 +45,14 @@ const SetPassword = () => {
 
       // Navigate to admin panel after a brief delay
       setTimeout(() => {
-        navigate('/super-admin', { replace: true });
+        navigate('/team', { replace: true });
       }, 2000);
     } catch (error: any) {
       console.error('Error setting password:', error);
 
       if (error.code === 'auth/requires-recent-login') {
         toast.error('For security reasons, please sign in again before setting your password.');
-        navigate('/super-admin/login', { replace: true });
+        navigate('/team/login', { replace: true });
       } else if (error.code === 'auth/weak-password') {
         toast.error('Password is too weak. Please use a stronger password.');
       } else {
@@ -65,12 +65,12 @@ const SetPassword = () => {
 
   const handleSkip = () => {
     window.localStorage.removeItem('needsPasswordSetup');
-    navigate('/super-admin', { replace: true });
+    navigate('/team', { replace: true });
   };
 
   // If user is not logged in or not an admin, redirect
   if (!user || !isAdmin) {
-    navigate('/super-admin/login', { replace: true });
+    navigate('/team/login', { replace: true });
     return null;
   }
 
@@ -93,7 +93,7 @@ const SetPassword = () => {
           </CardHeader>
           <CardContent className="flex justify-center pt-4">
             <Button
-              onClick={() => navigate('/super-admin', { replace: true })}
+              onClick={() => navigate('/team', { replace: true })}
               className="bg-blue-500 hover:bg-blue-600 text-white"
             >
               Go to Admin Panel

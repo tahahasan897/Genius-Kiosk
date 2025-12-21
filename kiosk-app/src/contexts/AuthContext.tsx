@@ -18,6 +18,8 @@ interface AuthContextType {
   loading: boolean;
   isAdmin: boolean;
   isSuperAdmin: boolean;
+  isTeamAdmin: boolean; // Can access /team page (super_admin or team_admin)
+  role: 'super_admin' | 'team_admin' | 'store_admin' | null; // The actual role
   adminRole: AdminRoleResponse | null;
   signInWithGoogle: () => Promise<User | void>;
   signInWithEmail: (email: string, password: string) => Promise<User | void>;
@@ -155,6 +157,8 @@ export const AuthProvider = ({ children }: AuthProviderProps) => {
     loading,
     isAdmin: adminRole?.isAdmin ?? false,
     isSuperAdmin: adminRole?.isSuperAdmin ?? false,
+    isTeamAdmin: adminRole?.isTeamAdmin ?? adminRole?.isSuperAdmin ?? false, // Can access /team page
+    role: adminRole?.role ?? null, // 'super_admin', 'team_admin', or 'store_admin'
     adminRole,
     signInWithGoogle: handleSignInWithGoogle,
     signInWithEmail: handleSignInWithEmail,
@@ -201,9 +205,10 @@ export const ProtectedRoute = ({ children }: ProtectedRouteProps) => {
   return <>{children}</>;
 };
 
-// Super Admin Route component - allows any authenticated admin
+// Team Admin Route component - allows super_admin and team_admin (NOT store_admin)
+// Store admins can only access /admin, not /team
 export const SuperAdminRoute = ({ children }: ProtectedRouteProps) => {
-  const { user, loading, isAdmin, adminRole, signOut, refreshAdminRole } = useAuth();
+  const { user, loading, isAdmin, isTeamAdmin, role, adminRole, signOut, refreshAdminRole } = useAuth();
   const location = useLocation();
   const [retrying, setRetrying] = useState(false);
 
@@ -219,7 +224,7 @@ export const SuperAdminRoute = ({ children }: ProtectedRouteProps) => {
   const handleSignOut = async () => {
     try {
       await signOut();
-      window.location.href = '/super-admin/login';
+      window.location.href = '/team/login';
     } catch (error) {
       console.error('Sign out error:', error);
     }
@@ -237,13 +242,20 @@ export const SuperAdminRoute = ({ children }: ProtectedRouteProps) => {
   }
 
   if (!user) {
-    // Redirect to super-admin login page
-    return <Navigate to="/super-admin/login" state={{ from: location }} replace />;
+    // Redirect to team login page
+    return <Navigate to="/team/login" state={{ from: location }} replace />;
   }
 
-  // Check if user is any kind of admin (super admin or chain admin)
-  if (!isAdmin) {
-    // User is logged in but not an admin - show access denied
+  // Check if user is a team admin (super_admin or team_admin)
+  // Store admins (role='store_admin') cannot access the /team page
+  if (!isTeamAdmin) {
+    // Determine the appropriate message
+    const isStoreAdmin = isAdmin && role === 'store_admin';
+    const title = isStoreAdmin ? 'Team Access Required' : 'Access Denied';
+    const message = isStoreAdmin
+      ? 'You have Store Admin access. The Team Dashboard is only available to Team Admins and Super Admins. You can access the Store Admin panel at /admin.'
+      : "You don't have permission to access the Team Dashboard. Please contact your administrator if you believe this is an error.";
+
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-4 text-center p-6">
@@ -263,10 +275,9 @@ export const SuperAdminRoute = ({ children }: ProtectedRouteProps) => {
               />
             </svg>
           </div>
-          <h1 className="text-2xl font-bold">Access Denied</h1>
+          <h1 className="text-2xl font-bold">{title}</h1>
           <p className="text-muted-foreground max-w-md">
-            You don't have permission to access the admin panel.
-            Please contact your administrator if you believe this is an error.
+            {message}
           </p>
           {user?.email && (
             <p className="text-sm text-muted-foreground">

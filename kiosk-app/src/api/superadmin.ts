@@ -33,10 +33,13 @@ export interface AdminUser {
 export interface AdminRoleResponse {
   isAdmin: boolean;
   isSuperAdmin: boolean;
+  isTeamAdmin?: boolean; // Can access /team page (super_admin or team_admin)
+  role?: 'super_admin' | 'team_admin' | 'store_admin'; // The actual role
   userId?: number;
   email?: string;
   displayName?: string | null;
   chainId?: number | null;
+  chainIds?: number[]; // Multi-chain support
 }
 
 export interface Chain {
@@ -334,6 +337,7 @@ export const getAdminInvites = async (status?: 'pending' | 'accepted' | 'all'): 
 export const createAdminInvite = async (data: {
   email: string;
   is_super_admin?: boolean;
+  role?: 'super_admin' | 'team_admin' | 'store_admin';
   chain_id?: number;
   chain_ids?: number[];
 }): Promise<AdminInvite> => {

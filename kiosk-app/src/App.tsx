@@ -39,11 +39,11 @@ const App = () => (
                     </ProtectedRoute>
                   }
                 />
-                <Route path="/super-admin/login" element={<SuperAdminLogin />} />
-                <Route path="/super-admin/set-password" element={<SetPassword />} />
+                <Route path="/team/login" element={<SuperAdminLogin />} />
+                <Route path="/team/set-password" element={<SetPassword />} />
                 <Route path="/admin-invite-callback" element={<AdminInviteCallback />} />
                 <Route
-                  path="/super-admin"
+                  path="/team"
                   element={
                     <SuperAdminRoute>
                       <SuperAdmin />

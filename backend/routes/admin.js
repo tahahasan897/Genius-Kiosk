@@ -5,6 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import pool, { query } from '../db.js';
+import { requireAdmin, canAccessStore } from '../middleware/auth.js';
 
 const router = express.Router();
 const __filename = fileURLToPath(import.meta.url);
@@ -14,13 +15,26 @@ const __dirname = path.dirname(__filename);
 // DASHBOARD ENDPOINT
 // ============================================
 
-router.get('/dashboard', async (req, res) => {
+router.get('/dashboard', requireAdmin, async (req, res) => {
   try {
     const { storeId = 1 } = req.query;
     const storeIdParam = parseInt(storeId);
 
-    // Get total products count
-    const totalProductsResult = await query('SELECT COUNT(*) FROM products');
+    // Verify admin has access to this store
+    const hasAccess = await canAccessStore(req.adminUser, storeIdParam);
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied. You do not have access to this store.' });
+    }
+
+    // Get store's chain_id for filtering products
+    const storeResult = await query('SELECT chain_id FROM stores WHERE store_id = $1', [storeIdParam]);
+    if (storeResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Store not found' });
+    }
+    const chainId = storeResult.rows[0].chain_id;
+
+    // Get total products count (filtered by chain)
+    const totalProductsResult = await query('SELECT COUNT(*) FROM products WHERE chain_id = $1', [chainId]);
     const totalProducts = parseInt(totalProductsResult.rows[0].count);
 
     // Get linked products count (products with map links)
@@ -44,18 +58,19 @@ router.get('/dashboard', async (req, res) => {
     );
     const outOfStockCount = parseInt(outOfStockResult.rows[0].count);
 
-    // Get products missing images
+    // Get products missing images (filtered by chain)
     const missingImagesResult = await query(
-      `SELECT COUNT(*) FROM products WHERE image_url IS NULL OR image_url = ''`
+      `SELECT COUNT(*) FROM products WHERE chain_id = $1 AND (image_url IS NULL OR image_url = '')`,
+      [chainId]
     );
     const missingImagesCount = parseInt(missingImagesResult.rows[0].count);
 
-    // Get products missing location data
+    // Get products missing location data (filtered by chain)
     const missingLocationResult = await query(
       `SELECT COUNT(*) FROM products p
        LEFT JOIN store_inventory si ON p.product_id = si.product_id AND si.store_id = $1
-       WHERE si.aisle IS NULL OR si.aisle = ''`,
-      [storeIdParam]
+       WHERE p.chain_id = $2 AND (si.aisle IS NULL OR si.aisle = '')`,
+      [storeIdParam, chainId]
     );
     const missingLocationCount = parseInt(missingLocationResult.rows[0].count);
 
@@ -285,15 +300,28 @@ const imageUpload = multer({
 });
 
 // Get all products (admin view)
-router.get('/products', async (req, res) => {
+router.get('/products', requireAdmin, async (req, res) => {
   try {
     const { page = 1, limit = 50, storeId = 1 } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
     const storeIdParam = parseInt(storeId);
 
-    // JOIN with store_inventory to get aisle and shelf data
+    // Verify admin has access to this store
+    const hasAccess = await canAccessStore(req.adminUser, storeIdParam);
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied. You do not have access to this store.' });
+    }
+
+    // Get store's chain_id for filtering products
+    const storeResult = await query('SELECT chain_id FROM stores WHERE store_id = $1', [storeIdParam]);
+    if (storeResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Store not found' });
+    }
+    const chainId = storeResult.rows[0].chain_id;
+
+    // JOIN with store_inventory to get aisle and shelf data (filtered by chain)
     const result = await query(
-      `SELECT 
+      `SELECT
         p.product_id,
         p.sku,
         p.product_name,
@@ -308,12 +336,13 @@ router.get('/products', async (req, res) => {
         si.is_available
        FROM products p
        LEFT JOIN store_inventory si ON p.product_id = si.product_id AND si.store_id = $1
+       WHERE p.chain_id = $2
        ORDER BY p.product_id
-       LIMIT $2 OFFSET $3`,
-      [storeIdParam, parseInt(limit), offset]
+       LIMIT $3 OFFSET $4`,
+      [storeIdParam, chainId, parseInt(limit), offset]
     );
 
-    const countResult = await query('SELECT COUNT(*) FROM products');
+    const countResult = await query('SELECT COUNT(*) FROM products WHERE chain_id = $1', [chainId]);
     const total = parseInt(countResult.rows[0].count);
 
     res.json({
@@ -332,7 +361,7 @@ router.get('/products', async (req, res) => {
 });
 
 // Create new product
-router.post('/products', async (req, res) => {
+router.post('/products', requireAdmin, async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -348,6 +377,14 @@ router.post('/products', async (req, res) => {
       stock_quantity,
       storeId = 1 // Default to store 1
     } = req.body;
+
+    // Verify admin has access to this store
+    const hasAccess = await canAccessStore(req.adminUser, storeId);
+    if (!hasAccess) {
+      await client.query('ROLLBACK');
+      client.release();
+      return res.status(403).json({ error: 'Access denied. You do not have access to this store.' });
+    }
 
     if (!sku || !product_name || !category || !base_price) {
       await client.query('ROLLBACK');
@@ -409,7 +446,7 @@ router.post('/products', async (req, res) => {
 });
 
 // Update product
-router.put('/products/:id', async (req, res) => {
+router.put('/products/:id', requireAdmin, async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -426,6 +463,14 @@ router.put('/products/:id', async (req, res) => {
       stock_quantity,
       storeId = 1 // Default to store 1
     } = req.body;
+
+    // Verify admin has access to this store
+    const hasAccess = await canAccessStore(req.adminUser, storeId);
+    if (!hasAccess) {
+      await client.query('ROLLBACK');
+      client.release();
+      return res.status(403).json({ error: 'Access denied. You do not have access to this store.' });
+    }
 
     // Update products table
     const productResult = await client.query(
@@ -488,7 +533,7 @@ router.put('/products/:id', async (req, res) => {
 });
 
 // Delete product
-router.delete('/products/:id', async (req, res) => {
+router.delete('/products/:id', requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -509,8 +554,18 @@ router.delete('/products/:id', async (req, res) => {
 });
 
 // CSV Import endpoint
-router.post('/import-products', upload.single('file'), async (req, res) => {
+router.post('/import-products', requireAdmin, upload.single('file'), async (req, res) => {
   try {
+    const storeId = req.body.storeId || 1;
+
+    // Verify admin has access to this store
+    const hasAccess = await canAccessStore(req.adminUser, storeId);
+    if (!hasAccess) {
+      if (req.file) {
+        try { fs.unlinkSync(req.file.path); } catch (e) { }
+      }
+      return res.status(403).json({ error: 'Access denied. You do not have access to this store.' });
+    }
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
     }
@@ -541,7 +596,6 @@ router.post('/import-products', upload.single('file'), async (req, res) => {
 
     let imported = 0;
     let errors = [];
-    const storeId = req.body.storeId || 1;
 
     // Insert products
     for (let i = 0; i < products.length; i++) {
@@ -658,10 +712,16 @@ router.post('/import-products', upload.single('file'), async (req, res) => {
 });
 
 // Get store map data
-router.get('/stores/:id/map', async (req, res) => {
+router.get('/stores/:id/map', requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { published } = req.query; // Query param to filter by published status
+
+    // Verify admin has access to this store
+    const hasAccess = await canAccessStore(req.adminUser, id);
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied. You do not have access to this store.' });
+    }
 
     const storeResult = await query('SELECT * FROM stores WHERE store_id = $1', [id]);
 
@@ -698,7 +758,7 @@ router.get('/stores/:id/map', async (req, res) => {
 });
 
 // Update store map image
-router.post('/stores/:id/map/image', (req, res, next) => {
+router.post('/stores/:id/map/image', requireAdmin, (req, res, next) => {
   imageUpload.single('image')(req, res, (err) => {
     if (err) {
       if (err.code === 'LIMIT_FILE_SIZE') {
@@ -711,6 +771,15 @@ router.post('/stores/:id/map/image', (req, res, next) => {
 }, async (req, res) => {
   try {
     const { id } = req.params;
+
+    // Verify admin has access to this store
+    const hasAccess = await canAccessStore(req.adminUser, id);
+    if (!hasAccess) {
+      if (req.file) {
+        try { fs.unlinkSync(req.file.path); } catch (e) { }
+      }
+      return res.status(403).json({ error: 'Access denied. You do not have access to this store.' });
+    }
 
     // Check if file was uploaded
     if (!req.file) {
@@ -757,11 +826,18 @@ router.post('/stores/:id/map/image', (req, res, next) => {
 });
 
 // Save map elements
-router.post('/stores/:id/map/elements', async (req, res) => {
+router.post('/stores/:id/map/elements', requireAdmin, async (req, res) => {
   const client = await pool.connect();
   try {
     const { id } = req.params;
     const { elements } = req.body;
+
+    // Verify admin has access to this store
+    const hasAccess = await canAccessStore(req.adminUser, id);
+    if (!hasAccess) {
+      client.release();
+      return res.status(403).json({ error: 'Access denied. You do not have access to this store.' });
+    }
 
     if (!Array.isArray(elements)) {
       client.release();
@@ -910,9 +986,15 @@ router.post('/stores/:id/map/elements', async (req, res) => {
 // ============================================
 
 // Create a single map element
-router.post('/stores/:id/map/element', async (req, res) => {
+router.post('/stores/:id/map/element', requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
+
+    // Verify admin has access to this store
+    const hasAccess = await canAccessStore(req.adminUser, id);
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied. You do not have access to this store.' });
+    }
     const { element } = req.body;
 
     if (!element) {
@@ -993,9 +1075,15 @@ router.post('/stores/:id/map/element', async (req, res) => {
 });
 
 // Update a single map element
-router.put('/stores/:id/map/element/:elementId', async (req, res) => {
+router.put('/stores/:id/map/element/:elementId', requireAdmin, async (req, res) => {
   try {
     const { id, elementId } = req.params;
+
+    // Verify admin has access to this store
+    const hasAccess = await canAccessStore(req.adminUser, id);
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied. You do not have access to this store.' });
+    }
     const { element } = req.body;
 
     if (!element) {
@@ -1088,9 +1176,15 @@ router.put('/stores/:id/map/element/:elementId', async (req, res) => {
 });
 
 // Delete a single map element
-router.delete('/stores/:id/map/element/:elementId', async (req, res) => {
+router.delete('/stores/:id/map/element/:elementId', requireAdmin, async (req, res) => {
   try {
     const { id, elementId } = req.params;
+
+    // Verify admin has access to this store
+    const hasAccess = await canAccessStore(req.adminUser, id);
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied. You do not have access to this store.' });
+    }
 
     // Check if element exists
     const existing = await query(
@@ -1118,9 +1212,15 @@ router.delete('/stores/:id/map/element/:elementId', async (req, res) => {
 });
 
 // Delete store map image
-router.delete('/stores/:id/map/image', async (req, res) => {
+router.delete('/stores/:id/map/image', requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
+
+    // Verify admin has access to this store
+    const hasAccess = await canAccessStore(req.adminUser, id);
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied. You do not have access to this store.' });
+    }
 
     // Verify store exists
     const storeCheck = await query('SELECT store_id FROM stores WHERE store_id = $1', [id]);
@@ -1149,10 +1249,17 @@ router.delete('/stores/:id/map/image', async (req, res) => {
 // ============================================
 
 // Publish map - mark all current elements as published
-router.post('/stores/:id/map/publish', async (req, res) => {
+router.post('/stores/:id/map/publish', requireAdmin, async (req, res) => {
   const client = await pool.connect();
   try {
     const { id } = req.params;
+
+    // Verify admin has access to this store
+    const hasAccess = await canAccessStore(req.adminUser, id);
+    if (!hasAccess) {
+      client.release();
+      return res.status(403).json({ error: 'Access denied. You do not have access to this store.' });
+    }
 
     await client.query('BEGIN');
 
@@ -1191,9 +1298,15 @@ router.post('/stores/:id/map/publish', async (req, res) => {
 });
 
 // Get map publish status
-router.get('/stores/:id/map/status', async (req, res) => {
+router.get('/stores/:id/map/status', requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
+
+    // Verify admin has access to this store
+    const hasAccess = await canAccessStore(req.adminUser, id);
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied. You do not have access to this store.' });
+    }
 
     const storeResult = await query(
       'SELECT map_published_at, map_has_draft_changes FROM stores WHERE store_id = $1',
@@ -1233,9 +1346,15 @@ router.get('/stores/:id/map/status', async (req, res) => {
 // ============================================
 
 // Get uploaded images for a store map
-router.get('/stores/:id/map/uploaded-images', async (req, res) => {
+router.get('/stores/:id/map/uploaded-images', requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
+
+    // Verify admin has access to this store
+    const hasAccess = await canAccessStore(req.adminUser, id);
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied. You do not have access to this store.' });
+    }
     const { published } = req.query;
 
     // Get from store_maps table
@@ -1264,9 +1383,16 @@ router.get('/stores/:id/map/uploaded-images', async (req, res) => {
 });
 
 // Save uploaded images for a store map (draft)
-router.post('/stores/:id/map/uploaded-images', async (req, res) => {
+router.post('/stores/:id/map/uploaded-images', requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
+
+    // Verify admin has access to this store
+    const hasAccess = await canAccessStore(req.adminUser, id);
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied. You do not have access to this store.' });
+    }
+
     const { uploadedImages } = req.body;
 
     if (!Array.isArray(uploadedImages)) {
@@ -1316,9 +1442,15 @@ router.post('/stores/:id/map/uploaded-images', async (req, res) => {
 });
 
 // Publish uploaded images (copy draft to published)
-router.post('/stores/:id/map/uploaded-images/publish', async (req, res) => {
+router.post('/stores/:id/map/uploaded-images/publish', requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
+
+    // Verify admin has access to this store
+    const hasAccess = await canAccessStore(req.adminUser, id);
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied. You do not have access to this store.' });
+    }
 
     // Get current map data
     const result = await query(
@@ -1354,9 +1486,15 @@ router.post('/stores/:id/map/uploaded-images/publish', async (req, res) => {
 });
 
 // Get products for preview selector (only products with map links)
-router.get('/stores/:storeId/products/preview', async (req, res) => {
+router.get('/stores/:storeId/products/preview', requireAdmin, async (req, res) => {
   try {
     const { storeId } = req.params;
+
+    // Verify admin has access to this store
+    const hasAccess = await canAccessStore(req.adminUser, storeId);
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied. You do not have access to this store.' });
+    }
     const { search = '', limit = 100 } = req.query;
 
     let sql = `
@@ -1497,9 +1635,15 @@ const resolveElementId = async (storeId, pinId) => {
 };
 
 // Get all products linked to a specific pin
-router.get('/stores/:storeId/pins/:pinId/products', async (req, res) => {
+router.get('/stores/:storeId/pins/:pinId/products', requireAdmin, async (req, res) => {
   try {
     const { storeId, pinId } = req.params;
+
+    // Verify admin has access to this store
+    const hasAccess = await canAccessStore(req.adminUser, storeId);
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied. You do not have access to this store.' });
+    }
 
     // Resolve the database element ID from frontend ID or database ID
     const elementDbId = await resolveElementId(storeId, pinId);
@@ -1542,10 +1686,17 @@ router.get('/stores/:storeId/pins/:pinId/products', async (req, res) => {
 });
 
 // Link products to a pin (bulk operation)
-router.post('/stores/:storeId/pins/:pinId/link', async (req, res) => {
+router.post('/stores/:storeId/pins/:pinId/link', requireAdmin, async (req, res) => {
   const client = await pool.connect();
   try {
     const { storeId, pinId } = req.params;
+
+    // Verify admin has access to this store
+    const hasAccess = await canAccessStore(req.adminUser, storeId);
+    if (!hasAccess) {
+      client.release();
+      return res.status(403).json({ error: 'Access denied. You do not have access to this store.' });
+    }
     const { productIds } = req.body;
 
     if (!Array.isArray(productIds) || productIds.length === 0) {
@@ -1612,9 +1763,15 @@ router.post('/stores/:storeId/pins/:pinId/link', async (req, res) => {
 });
 
 // Unlink products from a pin (bulk operation)
-router.delete('/stores/:storeId/pins/:pinId/unlink', async (req, res) => {
+router.delete('/stores/:storeId/pins/:pinId/unlink', requireAdmin, async (req, res) => {
   try {
     const { storeId, pinId } = req.params;
+
+    // Verify admin has access to this store
+    const hasAccess = await canAccessStore(req.adminUser, storeId);
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied. You do not have access to this store.' });
+    }
     const { productIds } = req.body;
 
     if (!Array.isArray(productIds) || productIds.length === 0) {
@@ -1653,9 +1810,15 @@ router.delete('/stores/:storeId/pins/:pinId/unlink', async (req, res) => {
 });
 
 // Get all products with their link status for a specific pin
-router.get('/stores/:storeId/pins/:pinId/products/all', async (req, res) => {
+router.get('/stores/:storeId/pins/:pinId/products/all', requireAdmin, async (req, res) => {
   try {
     const { storeId, pinId } = req.params;
+
+    // Verify admin has access to this store
+    const hasAccess = await canAccessStore(req.adminUser, storeId);
+    if (!hasAccess) {
+      return res.status(403).json({ error: 'Access denied. You do not have access to this store.' });
+    }
     const { search = '', page = 1, limit = 50 } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
@@ -1721,10 +1884,17 @@ router.get('/stores/:storeId/pins/:pinId/products/all', async (req, res) => {
 });
 
 // Sync product links for a pin (replace all links)
-router.put('/stores/:storeId/pins/:pinId/link', async (req, res) => {
+router.put('/stores/:storeId/pins/:pinId/link', requireAdmin, async (req, res) => {
   const client = await pool.connect();
   try {
     const { storeId, pinId } = req.params;
+
+    // Verify admin has access to this store
+    const hasAccess = await canAccessStore(req.adminUser, storeId);
+    if (!hasAccess) {
+      client.release();
+      return res.status(403).json({ error: 'Access denied. You do not have access to this store.' });
+    }
     const { productIds } = req.body;
 
     if (!Array.isArray(productIds)) {

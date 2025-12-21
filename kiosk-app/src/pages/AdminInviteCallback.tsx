@@ -39,7 +39,7 @@ const AdminInviteCallback = () => {
       if (user && (adminRole?.isAdmin || adminRole?.isSuperAdmin)) {
         console.log('User already authenticated as admin, redirecting...');
         setState('already_authenticated');
-        setTimeout(() => navigate('/super-admin', { replace: true }), 1500);
+        setTimeout(() => navigate('/team', { replace: true }), 1500);
         return;
       }
 
@@ -57,7 +57,7 @@ const AdminInviteCallback = () => {
           console.log('Plain invite URL detected, redirecting to login...');
           // Not a Firebase magic link but has email - redirect to login
           toast.info('Please sign in to activate your admin access.');
-          navigate('/super-admin/login', { replace: true });
+          navigate('/team/login', { replace: true });
           return;
         }
 
@@ -67,7 +67,7 @@ const AdminInviteCallback = () => {
           const role = await refreshAdminRole();
           if (role?.isAdmin) {
             setState('already_authenticated');
-            setTimeout(() => navigate('/super-admin', { replace: true }), 1500);
+            setTimeout(() => navigate('/team', { replace: true }), 1500);
             return;
           }
         }
@@ -130,8 +130,8 @@ const AdminInviteCallback = () => {
 
         // Navigate to set password page after a brief moment for UI feedback
         setTimeout(() => {
-          console.log('Navigating to /super-admin/set-password...');
-          navigate('/super-admin/set-password', { replace: true });
+          console.log('Navigating to /team/set-password...');
+          navigate('/team/set-password', { replace: true });
         }, 1500);
       } else {
         console.log('No admin role found for this user');
@@ -251,7 +251,7 @@ const AdminInviteCallback = () => {
                 <p className="text-sm text-red-400">{error}</p>
               </div>
               <Button
-                onClick={() => navigate('/super-admin/login')}
+                onClick={() => navigate('/team/login')}
                 variant="outline"
                 className="w-full h-12 text-base font-medium border-gray-600 text-slate-300 hover:bg-gray-800 hover:text-slate-100"
               >
@@ -267,7 +267,7 @@ const AdminInviteCallback = () => {
                 <span className="text-slate-400">Setting up your password...</span>
               </div>
               <Button
-                onClick={() => navigate('/super-admin/set-password', { replace: true })}
+                onClick={() => navigate('/team/set-password', { replace: true })}
                 variant="ghost"
                 className="text-blue-500 hover:text-blue-400 hover:bg-gray-800"
               >
@@ -283,7 +283,7 @@ const AdminInviteCallback = () => {
                 <span className="text-slate-400">Redirecting to admin panel...</span>
               </div>
               <Button
-                onClick={() => navigate('/super-admin', { replace: true })}
+                onClick={() => navigate('/team', { replace: true })}
                 variant="ghost"
                 className="text-blue-500 hover:text-blue-400 hover:bg-gray-800"
               >

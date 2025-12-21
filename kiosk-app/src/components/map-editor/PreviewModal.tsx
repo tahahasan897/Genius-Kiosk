@@ -10,6 +10,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import type { MapElement, AnimationStyle } from './types';
 import { CANVAS_WIDTH, CANVAS_HEIGHT, calculateFitToViewScale, getStrokeDash } from './types';
 import { getGradientProps } from './GradientEditor';
+import { auth } from '@/lib/firebase';
 
 interface PreviewProduct {
   id: number;
@@ -45,6 +46,18 @@ interface PreviewModalProps {
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 const BASE_SCALE = 0.58; // Base scale for "100%" zoom
 
+// Helper to get auth headers for API calls
+const getAuthHeaders = (): Record<string, string> => {
+  const user = auth?.currentUser;
+  if (!user) {
+    return {};
+  }
+  return {
+    'x-firebase-uid': user.uid,
+    'x-firebase-email': user.email || '',
+  };
+};
+
 const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl, uploadedImages = [] }: PreviewModalProps) => {
   const [products, setProducts] = useState<PreviewProduct[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<PreviewProduct | null>(null);
@@ -79,7 +92,8 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl, uploade
     setLoading(true);
     try {
       const response = await fetch(
-        `${API_URL}/api/admin/stores/${storeId}/products/preview?search=${encodeURIComponent(search)}`
+        `${API_URL}/api/admin/stores/${storeId}/products/preview?search=${encodeURIComponent(search)}`,
+        { headers: getAuthHeaders() }
       );
       if (response.ok) {
         const data = await response.json();

@@ -114,13 +114,15 @@ router.get('/me', async (req, res) => {
     }
 
     // Check if user already exists as admin (by firebase_uid first, then by email)
+    // Include role column (defaults based on is_super_admin for backwards compatibility)
     let existingAdmin = await query(
       `SELECT au.user_id, au.email, au.display_name, au.is_super_admin, au.chain_id, au.firebase_uid,
+              COALESCE(au.role, CASE WHEN au.is_super_admin THEN 'super_admin' ELSE 'store_admin' END) as role,
               COALESCE(array_agg(aca.chain_id) FILTER (WHERE aca.chain_id IS NOT NULL), '{}') as chain_ids
        FROM admin_users au
        LEFT JOIN admin_chain_assignments aca ON au.user_id = aca.user_id
        WHERE au.firebase_uid = $1
-       GROUP BY au.user_id, au.email, au.display_name, au.is_super_admin, au.chain_id, au.firebase_uid`,
+       GROUP BY au.user_id, au.email, au.display_name, au.is_super_admin, au.chain_id, au.firebase_uid, au.role`,
       [firebaseUid]
     );
 
@@ -128,11 +130,12 @@ router.get('/me', async (req, res) => {
     if (existingAdmin.rows.length === 0 && userEmail) {
       existingAdmin = await query(
         `SELECT au.user_id, au.email, au.display_name, au.is_super_admin, au.chain_id, au.firebase_uid,
+                COALESCE(au.role, CASE WHEN au.is_super_admin THEN 'super_admin' ELSE 'store_admin' END) as role,
                 COALESCE(array_agg(aca.chain_id) FILTER (WHERE aca.chain_id IS NOT NULL), '{}') as chain_ids
          FROM admin_users au
          LEFT JOIN admin_chain_assignments aca ON au.user_id = aca.user_id
          WHERE LOWER(au.email) = LOWER($1)
-         GROUP BY au.user_id, au.email, au.display_name, au.is_super_admin, au.chain_id, au.firebase_uid`,
+         GROUP BY au.user_id, au.email, au.display_name, au.is_super_admin, au.chain_id, au.firebase_uid, au.role`,
         [userEmail]
       );
 
@@ -148,10 +151,14 @@ router.get('/me', async (req, res) => {
 
     if (existingAdmin.rows.length > 0) {
       const adminUser = existingAdmin.rows[0];
-      console.log(`   ✅ Existing admin found: ${adminUser.email} (super: ${adminUser.is_super_admin}, chains: ${adminUser.chain_ids})`);
+      // Determine if user can access the team page based on role
+      const canAccessTeam = adminUser.role === 'super_admin' || adminUser.role === 'team_admin';
+      console.log(`   ✅ Existing admin found: ${adminUser.email} (super: ${adminUser.is_super_admin}, role: ${adminUser.role}, chains: ${adminUser.chain_ids})`);
       return res.json({
         isAdmin: true,
         isSuperAdmin: adminUser.is_super_admin,
+        isTeamAdmin: canAccessTeam, // Can access /team page
+        role: adminUser.role, // 'super_admin', 'team_admin', or 'store_admin'
         userId: adminUser.user_id,
         email: adminUser.email,
         displayName: adminUser.display_name,
@@ -1227,16 +1234,25 @@ router.get('/invites', requireSuperAdmin, async (req, res) => {
   }
 });
 
-// Create invite (supports multiple chain assignments)
+// Create invite (supports multiple chain assignments and role)
 router.post('/invites', requireSuperAdmin, async (req, res) => {
   try {
-    const { email, is_super_admin, chain_id, chain_ids } = req.body;
+    const { email, is_super_admin, role, chain_id, chain_ids } = req.body;
 
     if (!email || !email.trim()) {
       return res.status(400).json({ error: 'Email is required' });
     }
 
     const normalizedEmail = email.trim().toLowerCase();
+
+    // Determine the role - use provided role or derive from is_super_admin
+    const validRoles = ['super_admin', 'team_admin', 'store_admin'];
+    let finalRole = role;
+    if (!finalRole || !validRoles.includes(finalRole)) {
+      // Fallback to is_super_admin for backwards compatibility
+      finalRole = is_super_admin ? 'super_admin' : 'store_admin';
+    }
+    const isSuperAdmin = finalRole === 'super_admin';
 
     // Support both chain_id (legacy) and chain_ids (new)
     let chainIdsArray = chain_ids || [];
@@ -1268,7 +1284,7 @@ router.post('/invites', requireSuperAdmin, async (req, res) => {
     }
 
     // Validate chain_ids if not super admin
-    if (!is_super_admin && chainIdsArray.length > 0) {
+    if (!isSuperAdmin && chainIdsArray.length > 0) {
       const chainCheck = await query(
         'SELECT chain_id FROM chains WHERE chain_id = ANY($1) AND is_active = true',
         [chainIdsArray]
@@ -1278,15 +1294,17 @@ router.post('/invites', requireSuperAdmin, async (req, res) => {
       }
     }
 
+    // Insert invite with role column (will use default if column doesn't exist yet)
     const result = await query(
-      `INSERT INTO admin_invites (email, is_super_admin, chain_id, chain_ids, invited_by)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING invite_id, email, is_super_admin, chain_id, chain_ids, created_at`,
+      `INSERT INTO admin_invites (email, is_super_admin, role, chain_id, chain_ids, invited_by)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING invite_id, email, is_super_admin, role, chain_id, chain_ids, created_at`,
       [
         normalizedEmail,
-        is_super_admin || false,
-        is_super_admin ? null : (chainIdsArray[0] || null), // Legacy single chain
-        is_super_admin ? '{}' : chainIdsArray, // New multi-chain array
+        isSuperAdmin,
+        finalRole,
+        isSuperAdmin ? null : (chainIdsArray[0] || null), // Legacy single chain
+        isSuperAdmin ? '{}' : chainIdsArray, // New multi-chain array
         req.adminUser.user_id
       ]
     );

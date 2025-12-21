@@ -56,9 +56,12 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 
+type AdminRole = 'super_admin' | 'team_admin' | 'store_admin';
+
 interface InviteFormData {
   email: string;
-  is_super_admin: boolean;
+  role: AdminRole;
+  is_super_admin: boolean; // Legacy - kept for compatibility
   chain_ids: number[];
 }
 
@@ -70,6 +73,7 @@ interface EditFormData {
 
 const emptyInviteFormData: InviteFormData = {
   email: '',
+  role: 'store_admin',
   is_super_admin: false,
   chain_ids: [],
 };
@@ -119,8 +123,9 @@ const AdminManagement = () => {
       toast.error('Email is required');
       return;
     }
-    if (!inviteFormData.is_super_admin && inviteFormData.chain_ids.length === 0) {
-      toast.error('Please select at least one chain for non-super-admin users');
+    // Chain selection required for team_admin and store_admin
+    if (inviteFormData.role !== 'super_admin' && inviteFormData.chain_ids.length === 0) {
+      toast.error('Please select at least one chain for Team Admin or Store Admin users');
       return;
     }
 
@@ -129,8 +134,9 @@ const AdminManagement = () => {
       // Step 1: Create invite in database
       await createAdminInvite({
         email: inviteFormData.email,
-        is_super_admin: inviteFormData.is_super_admin,
-        chain_ids: inviteFormData.is_super_admin ? undefined : inviteFormData.chain_ids,
+        is_super_admin: inviteFormData.role === 'super_admin',
+        role: inviteFormData.role,
+        chain_ids: inviteFormData.role === 'super_admin' ? undefined : inviteFormData.chain_ids,
       });
 
       // Step 2: Send magic link via Firebase
@@ -481,21 +487,60 @@ const AdminManagement = () => {
                 disabled={submitting}
               />
             </div>
-            <div className="flex items-center space-x-2">
-              <Checkbox
-                id="is-super-admin"
-                checked={inviteFormData.is_super_admin}
-                onCheckedChange={(checked) =>
-                  setInviteFormData({ ...inviteFormData, is_super_admin: checked as boolean, chain_ids: [] })
-                }
-                className="border-gray-600 data-[state=checked]:bg-blue-500 data-[state=checked]:border-blue-500"
-                disabled={submitting}
-              />
-              <Label htmlFor="is-super-admin" className="text-slate-300 cursor-pointer">
-                Super Admin (access to all chains)
-              </Label>
+            <div className="space-y-2">
+              <Label className="text-slate-300">Role *</Label>
+              <div className="space-y-2">
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="radio"
+                    id="role-super-admin"
+                    name="role"
+                    value="super_admin"
+                    checked={inviteFormData.role === 'super_admin'}
+                    onChange={() => setInviteFormData({ ...inviteFormData, role: 'super_admin', is_super_admin: true, chain_ids: [] })}
+                    className="w-4 h-4 text-blue-500 bg-gray-800 border-gray-600"
+                    disabled={submitting}
+                  />
+                  <Label htmlFor="role-super-admin" className="text-slate-300 cursor-pointer">
+                    <span className="font-medium">Super Admin</span>
+                    <span className="text-slate-500 text-sm ml-2">Full access to all chains and Team Dashboard</span>
+                  </Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="radio"
+                    id="role-team-admin"
+                    name="role"
+                    value="team_admin"
+                    checked={inviteFormData.role === 'team_admin'}
+                    onChange={() => setInviteFormData({ ...inviteFormData, role: 'team_admin', is_super_admin: false })}
+                    className="w-4 h-4 text-blue-500 bg-gray-800 border-gray-600"
+                    disabled={submitting}
+                  />
+                  <Label htmlFor="role-team-admin" className="text-slate-300 cursor-pointer">
+                    <span className="font-medium">Team Admin</span>
+                    <span className="text-slate-500 text-sm ml-2">Chain-specific support with Team Dashboard access</span>
+                  </Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="radio"
+                    id="role-store-admin"
+                    name="role"
+                    value="store_admin"
+                    checked={inviteFormData.role === 'store_admin'}
+                    onChange={() => setInviteFormData({ ...inviteFormData, role: 'store_admin', is_super_admin: false })}
+                    className="w-4 h-4 text-blue-500 bg-gray-800 border-gray-600"
+                    disabled={submitting}
+                  />
+                  <Label htmlFor="role-store-admin" className="text-slate-300 cursor-pointer">
+                    <span className="font-medium">Store Admin</span>
+                    <span className="text-slate-500 text-sm ml-2">Chain-specific, Store Admin panel only</span>
+                  </Label>
+                </div>
+              </div>
             </div>
-            {!inviteFormData.is_super_admin && (
+            {inviteFormData.role !== 'super_admin' && (
               <div className="space-y-2">
                 <Label className="text-slate-300">Assign to Chain(s) *</Label>
                 <div className="space-y-2 max-h-48 overflow-y-auto p-3 bg-gray-800 rounded-lg border border-gray-600">

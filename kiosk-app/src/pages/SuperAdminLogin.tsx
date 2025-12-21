@@ -20,8 +20,8 @@ const SuperAdminLogin = () => {
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [resetEmail, setResetEmail] = useState('');
 
-  // Get the intended destination or default to /super-admin
-  const from = (location.state as { from?: { pathname: string } })?.from?.pathname || '/super-admin';
+  // Get the intended destination or default to /team
+  const from = (location.state as { from?: { pathname: string } })?.from?.pathname || '/team';
 
   // Check if user is already logged in and is an admin (super or chain)
   useEffect(() => {
@@ -118,10 +118,10 @@ const SuperAdminLogin = () => {
             <Shield className="h-8 w-8 text-white" />
           </div>
           <CardTitle className="text-3xl font-bold text-slate-100">
-            Super Admin
+            Team Login
           </CardTitle>
           <CardDescription className="text-base mt-2 text-slate-400">
-            Sign in to access the super admin panel
+            Sign in to access the team dashboard
           </CardDescription>
         </CardHeader>
 

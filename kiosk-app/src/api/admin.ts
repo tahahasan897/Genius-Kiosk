@@ -1,6 +1,19 @@
 import axios from 'axios';
+import { auth } from '@/lib/firebase';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+
+// Helper to get auth headers
+const getAuthHeaders = () => {
+  const user = auth?.currentUser;
+  if (!user) {
+    return {};
+  }
+  return {
+    'x-firebase-uid': user.uid,
+    'x-firebase-email': user.email || '',
+  };
+};
 
 // Dashboard Types
 export interface GettingStartedStep {
@@ -79,25 +92,30 @@ export interface ProductsResponse {
     };
 }
 
-export const getAdminProducts = async (page = 1, limit = 50): Promise<ProductsResponse> => {
+export const getAdminProducts = async (page = 1, limit = 50, storeId = 1): Promise<ProductsResponse> => {
+    const headers = getAuthHeaders();
     const response = await axios.get(`${API_URL}/api/admin/products`, {
-        params: { page, limit }
+        headers,
+        params: { page, limit, storeId }
     });
     return response.data;
 };
 
-export const createProduct = async (product: Partial<AdminProduct>): Promise<AdminProduct> => {
-    const response = await axios.post(`${API_URL}/api/admin/products`, product);
+export const createProduct = async (product: Partial<AdminProduct> & { storeId?: number }): Promise<AdminProduct> => {
+    const headers = getAuthHeaders();
+    const response = await axios.post(`${API_URL}/api/admin/products`, product, { headers });
     return response.data;
 };
 
-export const updateProduct = async (id: number, product: Partial<AdminProduct>): Promise<AdminProduct> => {
-    const response = await axios.put(`${API_URL}/api/admin/products/${id}`, product);
+export const updateProduct = async (id: number, product: Partial<AdminProduct> & { storeId?: number }): Promise<AdminProduct> => {
+    const headers = getAuthHeaders();
+    const response = await axios.put(`${API_URL}/api/admin/products/${id}`, product, { headers });
     return response.data;
 };
 
 export const deleteProduct = async (id: number): Promise<void> => {
-    await axios.delete(`${API_URL}/api/admin/products/${id}`);
+    const headers = getAuthHeaders();
+    await axios.delete(`${API_URL}/api/admin/products/${id}`, { headers });
 };
 
 export const importProducts = async (file: File, storeId: string = '1'): Promise<{
@@ -106,12 +124,14 @@ export const importProducts = async (file: File, storeId: string = '1'): Promise
     total: number;
     errors?: Array<{ row: number; error: string; data: any }>;
 }> => {
+    const headers = getAuthHeaders();
     const formData = new FormData();
     formData.append('file', file);
     formData.append('storeId', storeId);
 
     const response = await axios.post(`${API_URL}/api/admin/import-products`, formData, {
         headers: {
+            ...headers,
             'Content-Type': 'multipart/form-data',
         },
     });
@@ -120,7 +140,9 @@ export const importProducts = async (file: File, storeId: string = '1'): Promise
 
 // Dashboard
 export const getDashboardStats = async (storeId: number = 1): Promise<DashboardStats> => {
+    const headers = getAuthHeaders();
     const response = await axios.get(`${API_URL}/api/admin/dashboard`, {
+        headers,
         params: { storeId }
     });
     return response.data;

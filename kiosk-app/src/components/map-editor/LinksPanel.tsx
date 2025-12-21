@@ -7,6 +7,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import type { MapElement } from './types';
+import { auth } from '@/lib/firebase';
 
 interface LinksPanelProps {
   element: MapElement | null;
@@ -28,6 +29,18 @@ interface ProductWithLink {
 }
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+
+// Helper to get auth headers for API calls
+const getAuthHeaders = (): Record<string, string> => {
+  const user = auth?.currentUser;
+  if (!user) {
+    return {};
+  }
+  return {
+    'x-firebase-uid': user.uid,
+    'x-firebase-email': user.email || '',
+  };
+};
 
 const LinksPanel = ({ element, storeId, onLinksChanged }: LinksPanelProps) => {
   const [products, setProducts] = useState<ProductWithLink[]>([]);
@@ -61,7 +74,8 @@ const LinksPanel = ({ element, storeId, onLinksChanged }: LinksPanelProps) => {
       // But we'll try the API call anyway and handle errors gracefully
       
       const response = await fetch(
-        `${API_URL}/api/admin/stores/${storeId}/pins/${pinId}/products/all?${params}`
+        `${API_URL}/api/admin/stores/${storeId}/pins/${pinId}/products/all?${params}`,
+        { headers: getAuthHeaders() }
       );
       
       if (!response.ok) {
@@ -137,7 +151,7 @@ const LinksPanel = ({ element, storeId, onLinksChanged }: LinksPanelProps) => {
           `${API_URL}/api/admin/stores/${storeId}/pins/${pinId}/unlink`,
           {
             method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
             body: JSON.stringify({ productIds: [product.product_id] }),
           }
         );
@@ -170,7 +184,7 @@ const LinksPanel = ({ element, storeId, onLinksChanged }: LinksPanelProps) => {
           `${API_URL}/api/admin/stores/${storeId}/pins/${pinId}/link`,
           {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
             body: JSON.stringify({ productIds: [product.product_id] }),
           }
         );
@@ -229,9 +243,9 @@ const LinksPanel = ({ element, storeId, onLinksChanged }: LinksPanelProps) => {
         `${API_URL}/api/admin/stores/${storeId}/pins/${pinId}/link`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            productIds: unlinkedProducts.map(p => p.product_id) 
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body: JSON.stringify({
+            productIds: unlinkedProducts.map(p => p.product_id)
           }),
         }
       );
@@ -273,9 +287,9 @@ const LinksPanel = ({ element, storeId, onLinksChanged }: LinksPanelProps) => {
         `${API_URL}/api/admin/stores/${storeId}/pins/${pinId}/unlink`,
         {
           method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            productIds: linkedProducts.map(p => p.product_id) 
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body: JSON.stringify({
+            productIds: linkedProducts.map(p => p.product_id)
           }),
         }
       );
