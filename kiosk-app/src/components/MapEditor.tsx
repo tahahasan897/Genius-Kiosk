@@ -14,10 +14,11 @@ import Sidebar from './map-editor/Sidebar';
 import LayersPanel from './map-editor/LayersPanel';
 import PropertiesPanel from './map-editor/PropertiesPanel';
 import LinksPanel from './map-editor/LinksPanel';
+import HistoryPanel, { type ElementHistoryEntry } from './map-editor/HistoryPanel';
 import PreviewModal from './map-editor/PreviewModal';
 import type { MapElement, Tool, ElementType, AnimationStyle, StrokeStyle } from './map-editor/types';
 // Note: ContextualToolbar removed - properties now shown in header bar
-import { defaultElement, defaultSizes, defaultSmartPin, defaultStaticPin, defaultDevicePin, CANVAS_WIDTH, CANVAS_HEIGHT, calculateFitToViewScale, animationStyleLabels, getStrokeDash } from './map-editor/types';
+import { defaultElement, defaultSizes, defaultSmartPin, defaultStaticPin, defaultDevicePin, CANVAS_WIDTH, CANVAS_HEIGHT, calculateFitToViewScale, animationStyleLabels, getStrokeDash, applyOpacityToColor } from './map-editor/types';
 import { getGradientProps } from './map-editor/GradientEditor';
 import { auth } from '@/lib/firebase';
 
@@ -46,7 +47,21 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     const [mapImage, setMapImage] = useState<HTMLImageElement | null>(null);
     const [mapImagePosition, setMapImagePosition] = useState({ x: 0, y: 0 });
     const [mapImageSize, setMapImageSize] = useState({ width: CANVAS_WIDTH, height: CANVAS_HEIGHT });
+    const [mapImageRotation, setMapImageRotation] = useState(0);
+    const [mapImageOpacity, setMapImageOpacity] = useState(0.9);
+    const [mapImageVisible, setMapImageVisible] = useState(true);
     const [isImageSelected, setIsImageSelected] = useState(false);
+    const [cropModeEnabled, setCropModeEnabled] = useState(false);
+    // Crop box state - defines the crop selection area relative to image
+    const [cropBox, setCropBox] = useState<{
+        imageId: string | 'background';
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    } | null>(null);
+    const cropBoxRef = useRef<any>(null);
+    const cropBoxTransformerRef = useRef<any>(null);
 
     // Multiple uploaded images support with per-image eraser strokes
     const [uploadedImages, setUploadedImages] = useState<Array<{
@@ -57,6 +72,9 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         y: number;
         width: number;
         height: number;
+        rotation: number;
+        opacity: number;
+        visible: boolean;
         eraserStrokes: number[][]; // Per-image eraser strokes
     }>>([]);
     const [selectedImageIds, setSelectedImageIds] = useState<string[]>([]); // Support multi-select for images
@@ -80,6 +98,10 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     const [isRightMouseDown, setIsRightMouseDown] = useState(false);
     const [isSpaceDragging, setIsSpaceDragging] = useState(false); // Track spacebar+drag panning
 
+    // Element placement history - tracks recently placed elements with their size and color
+    const [elementHistory, setElementHistory] = useState<ElementHistoryEntry[]>([]);
+    const MAX_HISTORY_ENTRIES = 10; // Limit history to last 10 elements
+
     // Context menu state
     const [contextMenu, setContextMenu] = useState<{
         x: number;
@@ -100,7 +122,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     } | null>(null);
 
     // Unified history type for proper ordering of all undo/redo actions
-    type UploadedImageData = { id: string; url: string; x: number; y: number; width: number; height: number; eraserStrokes: number[][] };
+    type UploadedImageData = { id: string; url: string; x: number; y: number; width: number; height: number; rotation: number; opacity: number; visible: boolean; eraserStrokes: number[][] };
     type HistoryAction =
         | { type: 'elements'; elements: MapElement[] }
         | { type: 'uploadedImageEraser'; imageId: string; previousStrokes: number[][]; addedStroke: number[] }
@@ -936,9 +958,16 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         }
     }, [selectedElementIds, namingElementId, editingTextId, elements]);
 
-    // Update image transformer when image is selected
+    // Update image transformer when image is selected (hide when crop mode is active)
     useEffect(() => {
         if (!imageTransformerRef.current || !imageGroupRef.current) return;
+
+        // Hide transformer when crop mode is enabled to avoid overlap
+        if (cropModeEnabled) {
+            imageTransformerRef.current.nodes([]);
+            imageTransformerRef.current.getLayer()?.batchDraw();
+            return;
+        }
 
         if (isImageSelected && mapImage) {
             imageTransformerRef.current.nodes([imageGroupRef.current]);
@@ -947,11 +976,18 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             imageTransformerRef.current.nodes([]);
             imageTransformerRef.current.getLayer()?.batchDraw();
         }
-    }, [isImageSelected, mapImage]);
+    }, [isImageSelected, mapImage, cropModeEnabled]);
 
-    // Update uploaded image transformer when an uploaded image is selected
+    // Update uploaded image transformer when an uploaded image is selected (hide when crop mode is active)
     useEffect(() => {
         if (!uploadedImageTransformerRef.current || !stageRef.current) return;
+
+        // Hide transformer when crop mode is enabled to avoid overlap
+        if (cropModeEnabled) {
+            uploadedImageTransformerRef.current.nodes([]);
+            uploadedImageTransformerRef.current.getLayer()?.batchDraw();
+            return;
+        }
 
         if (selectedImageIds.length > 0) {
             const stage = stageRef.current;
@@ -967,7 +1003,20 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             uploadedImageTransformerRef.current.nodes([]);
             uploadedImageTransformerRef.current.getLayer()?.batchDraw();
         }
-    }, [selectedImageIds, uploadedImages]);
+    }, [selectedImageIds, uploadedImages, cropModeEnabled]);
+
+    // Update crop box transformer when crop mode is enabled
+    useEffect(() => {
+        if (!cropBoxTransformerRef.current) return;
+
+        if (cropModeEnabled && cropBox && cropBoxRef.current) {
+            cropBoxTransformerRef.current.nodes([cropBoxRef.current]);
+            cropBoxTransformerRef.current.getLayer()?.batchDraw();
+        } else {
+            cropBoxTransformerRef.current.nodes([]);
+            cropBoxTransformerRef.current.getLayer()?.batchDraw();
+        }
+    }, [cropModeEnabled, cropBox]);
 
     // Track changes to elements for undo/redo
     useEffect(() => {
@@ -1083,6 +1132,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             y: number;
                             width: number;
                             height: number;
+                            rotation: number;
+                            opacity: number;
                             eraserStrokes: number[][];
                         }> = [];
 
@@ -1100,6 +1151,9 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                         y: savedImg.y,
                                         width: savedImg.width,
                                         height: savedImg.height,
+                                        rotation: savedImg.rotation ?? 0,
+                                        opacity: savedImg.opacity ?? 0.9,
+                                        visible: savedImg.visible ?? true,
                                         eraserStrokes: savedImg.eraserStrokes || [],
                                     });
                                     resolve();
@@ -1150,6 +1204,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                 y: number;
                                 width: number;
                                 height: number;
+                                rotation: number;
+                                opacity: number;
                                 eraserStrokes: number[][];
                             }> = [];
 
@@ -1167,6 +1223,9 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                             y: savedImg.y,
                                             width: savedImg.width,
                                             height: savedImg.height,
+                                            rotation: savedImg.rotation ?? 0,
+                                            opacity: savedImg.opacity ?? 0.9,
+                                            visible: savedImg.visible ?? true,
                                             eraserStrokes: savedImg.eraserStrokes || [],
                                         });
                                         resolve();
@@ -1243,6 +1302,9 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                         y,
                         width,
                         height,
+                        rotation: 0,
+                        opacity: 0.9,
+                        visible: true,
                         eraserStrokes: [],
                     }]);
                 };
@@ -1417,6 +1479,9 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     y,
                     width,
                     height,
+                    rotation: 0,
+                    opacity: 0.9,
+                    visible: true,
                     eraserStrokes: [],
                 }]);
                 setSelectedImageIds([newImageId]);
@@ -1489,6 +1554,143 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
 
         return { x: screenX, y: screenY };
     };
+
+    // Element history management functions
+    const addToElementHistory = useCallback((element: MapElement) => {
+        // Only track shape types (not pins, text, freehand)
+        const trackableTypes: ElementType[] = ['rectangle', 'circle', 'triangle', 'polygon', 'trapezoid', 'parallelogram', 'line', 'arrow'];
+        if (!trackableTypes.includes(element.type)) return;
+
+        const historyEntry: ElementHistoryEntry = {
+            id: element.id,
+            type: element.type,
+            // Size
+            width: element.width,
+            height: element.height,
+            // Fill
+            fillColor: element.fillColor,
+            fillOpacity: element.fillOpacity,
+            // Stroke
+            strokeColor: element.strokeColor,
+            strokeWidth: element.strokeWidth,
+            strokeOpacity: element.strokeOpacity,
+            strokeStyle: element.strokeStyle,
+            // Transform
+            rotation: element.rotation,
+            cornerRadius: element.cornerRadius,
+            // Polygon specific
+            sides: element.sides,
+            // Gradient
+            gradient: element.gradient,
+            // Timestamp
+            timestamp: Date.now(),
+        };
+
+        setElementHistory(prev => {
+            // Check if this element already exists in history
+            const existingIndex = prev.findIndex(entry => entry.id === element.id);
+            if (existingIndex >= 0) {
+                // Update existing entry
+                const updated = [...prev];
+                updated[existingIndex] = historyEntry;
+                return updated;
+            }
+            // Add new entry at the beginning and limit to MAX_HISTORY_ENTRIES
+            return [historyEntry, ...prev].slice(0, MAX_HISTORY_ENTRIES);
+        });
+    }, [MAX_HISTORY_ENTRIES]);
+
+    const updateElementHistory = useCallback((id: string, updates: Partial<Omit<ElementHistoryEntry, 'id' | 'type' | 'timestamp'>>) => {
+        setElementHistory(prev => prev.map(entry =>
+            entry.id === id
+                ? {
+                    ...entry,
+                    ...updates,
+                    timestamp: Date.now(),
+                }
+                : entry
+        ));
+    }, []);
+
+    const clearElementHistory = useCallback(() => {
+        setElementHistory([]);
+    }, []);
+
+    const placeElementFromHistory = useCallback((entry: ElementHistoryEntry) => {
+        // Get canvas center position
+        const centerX = CANVAS_WIDTH / 2;
+        const centerY = CANVAS_HEIGHT / 2;
+
+        // Create a new element with ALL properties from the history entry
+        const id = Date.now().toString();
+        const newElement: MapElement = {
+            // Base properties
+            id,
+            type: entry.type,
+            name: '',
+            visible: true,
+            locked: false,
+            zIndex: elements.length,
+            showNameOn: 'both',
+            // Position (will be adjusted below for some shapes)
+            x: centerX - entry.width / 2,
+            y: centerY - entry.height / 2,
+            // Size
+            width: entry.width,
+            height: entry.height,
+            // Fill - from history
+            fillColor: entry.fillColor,
+            fillOpacity: entry.fillOpacity,
+            // Stroke - from history
+            strokeColor: entry.strokeColor,
+            strokeWidth: entry.strokeWidth,
+            strokeOpacity: entry.strokeOpacity,
+            strokeStyle: entry.strokeStyle,
+            // Transform - from history (rotation starts at 0 for new placement)
+            rotation: 0, // Don't apply rotation on placement - let user rotate if needed
+            cornerRadius: entry.cornerRadius,
+            // Polygon specific
+            sides: entry.sides,
+            // Gradient - from history
+            gradient: entry.gradient,
+        } as MapElement;
+
+        // For specific shapes, adjust position calculation
+        if (entry.type === 'circle' || entry.type === 'polygon' || entry.type === 'triangle') {
+            newElement.x = centerX;
+            newElement.y = centerY;
+        }
+
+        // Add element to state
+        setElements(prev => [...prev, newElement]);
+        setSelectedElementIds([id]);
+
+        // Add to history (update with new ID)
+        addToElementHistory(newElement);
+
+        // Auto-switch to select mode
+        setTool('select');
+
+        // Save to database
+        (async () => {
+            const result = await createElementInDb(newElement);
+            if (result.success && result.dbId) {
+                const newDbId = result.dbId.toString();
+                setElements(prev => prev.map(el =>
+                    el.id === id
+                        ? { ...el, id: newDbId, persisted: true, metadata: { ...el.metadata, frontendId: id } }
+                        : el
+                ));
+                setSelectedElementIds(prev => prev.map(prevId => prevId === id ? newDbId : prevId));
+                // Update history entry with new DB ID
+                setElementHistory(prev => prev.map(historyEntry =>
+                    historyEntry.id === id ? { ...historyEntry, id: newDbId } : historyEntry
+                ));
+            }
+        })();
+
+        toast.success(`Placed ${entry.type} from history`);
+    }, [elements.length, addToElementHistory]);
 
     const createElement = (type: ElementType, x: number, y: number) => {
         const id = Date.now().toString();
@@ -1678,6 +1880,9 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             setElements(prev => [...prev, newElement!]);
             setSelectedElementIds([newElement.id]);
 
+            // Add to element history for quick reuse
+            addToElementHistory(newElement);
+
             // Auto-start label editing for elements (excluding smart-pin, line, arrow)
             if (newElement.type === 'text') {
                 // For text elements, use inline cursor editing (same as other elements)
@@ -1721,6 +1926,10 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     setEditingLabelId(prev => prev === tempId ? newDbId : prev);
                     // Update editingTextId if it was set to the temp ID
                     setEditingTextId(prev => prev === tempId ? newDbId : prev);
+                    // Update element history with new db ID
+                    setElementHistory(prev => prev.map(entry =>
+                        entry.id === tempId ? { ...entry, id: newDbId } : entry
+                    ));
                 }
             })();
         }
@@ -1826,6 +2035,11 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         // If we're editing a label, finish editing first
         if (editingLabelId) {
             finishLabelEdit(true);
+            return;
+        }
+
+        // In crop mode, don't clear selections - user should interact with crop box only
+        if (cropModeEnabled) {
             return;
         }
 
@@ -2128,22 +2342,11 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     };
 
     // Save uploaded images state to unified history (for undo/redo of image deletion)
-    const saveImagesToHistory = (previousImages: typeof uploadedImages, afterImages: typeof uploadedImages) => {
-        const mapImages = (images: typeof uploadedImages): UploadedImageData[] =>
-            images.map(img => ({
-                id: img.id,
-                url: img.url,
-                x: img.x,
-                y: img.y,
-                width: img.width,
-                height: img.height,
-                eraserStrokes: img.eraserStrokes,
-            }));
-
+    const saveImagesToHistory = (previousImages: UploadedImageData[], afterImages: UploadedImageData[]) => {
         const action: HistoryAction = {
             type: 'uploadedImages',
-            previousImages: mapImages(previousImages),
-            afterImages: mapImages(afterImages),
+            previousImages,
+            afterImages,
         };
         // Use ref to get the latest history step (avoids stale closure issues)
         const currentStep = unifiedHistoryStepRef.current;
@@ -2415,12 +2618,22 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         }
     }, [selectedElementIds, elements, deleteElementFromDb]);
 
-    // Select All
+    // Select All - includes elements and uploaded images
     const handleSelectAll = useCallback(() => {
         const visibleElementIds = elements.filter(el => el.visible).map(el => el.id);
+        const uploadedImageIds = uploadedImages.map(img => img.id);
+
         setSelectedElementIds(visibleElementIds);
-        toast.success(`Selected ${visibleElementIds.length} element${visibleElementIds.length > 1 ? 's' : ''}`);
-    }, [elements]);
+        setSelectedImageIds(uploadedImageIds);
+
+        // Also select the main background image if it exists
+        if (mapImage) {
+            setIsImageSelected(true);
+        }
+
+        const totalSelected = visibleElementIds.length + uploadedImageIds.length + (mapImage ? 1 : 0);
+        toast.success(`Selected ${totalSelected} item${totalSelected !== 1 ? 's' : ''}`);
+    }, [elements, uploadedImages, mapImage]);
 
     const handleDeleteElement = useCallback((id: string) => {
         // Remove from state immediately for responsive UI
@@ -2431,6 +2644,223 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         // Delete from database
         deleteElementFromDb(id);
     }, [deleteElementFromDb]);
+
+    // Update uploaded image properties
+    const handleUpdateImage = useCallback((id: string, updates: Partial<{ x: number; y: number; width: number; height: number; rotation: number; opacity: number }>) => {
+        // Capture current state for history
+        const previousImages = uploadedImagesRef.current.map(img => ({
+            id: img.id,
+            url: img.url,
+            x: img.x,
+            y: img.y,
+            width: img.width,
+            height: img.height,
+            rotation: img.rotation ?? 0,
+            opacity: img.opacity ?? 0.9,
+            eraserStrokes: img.eraserStrokes,
+        }));
+
+        // Update the image
+        setUploadedImages(prev => prev.map(img =>
+            img.id === id ? { ...img, ...updates } : img
+        ));
+
+        // Save to history
+        const afterImages = uploadedImagesRef.current.map(img => {
+            if (img.id === id) {
+                const updated = { ...img, ...updates };
+                return {
+                    id: updated.id,
+                    url: updated.url,
+                    x: updated.x,
+                    y: updated.y,
+                    width: updated.width,
+                    height: updated.height,
+                    rotation: updated.rotation ?? 0,
+                    opacity: updated.opacity ?? 0.9,
+                    eraserStrokes: updated.eraserStrokes,
+                };
+            }
+            return {
+                id: img.id,
+                url: img.url,
+                x: img.x,
+                y: img.y,
+                width: img.width,
+                height: img.height,
+                rotation: img.rotation ?? 0,
+                opacity: img.opacity ?? 0.9,
+                eraserStrokes: img.eraserStrokes,
+            };
+        });
+        saveImagesToHistory(previousImages, afterImages);
+        setHasUnsavedChanges(true);
+    }, [saveImagesToHistory]);
+
+    // Update background image properties
+    const handleUpdateBackgroundImage = useCallback((updates: Partial<{ x: number; y: number; width: number; height: number; rotation: number; opacity: number }>) => {
+        if (updates.x !== undefined || updates.y !== undefined) {
+            setMapImagePosition(prev => ({
+                x: updates.x ?? prev.x,
+                y: updates.y ?? prev.y,
+            }));
+        }
+        if (updates.width !== undefined || updates.height !== undefined) {
+            setMapImageSize(prev => ({
+                width: updates.width ?? prev.width,
+                height: updates.height ?? prev.height,
+            }));
+        }
+        if (updates.rotation !== undefined) {
+            setMapImageRotation(updates.rotation);
+        }
+        if (updates.opacity !== undefined) {
+            setMapImageOpacity(updates.opacity);
+        }
+        setHasUnsavedChanges(true);
+    }, []);
+
+    // Initialize crop box when entering crop mode
+    const initializeCropBox = useCallback((imageId: string | 'background') => {
+        if (imageId === 'background') {
+            setCropBox({
+                imageId: 'background',
+                x: mapImagePosition.x,
+                y: mapImagePosition.y,
+                width: mapImageSize.width,
+                height: mapImageSize.height,
+            });
+        } else {
+            const img = uploadedImages.find(i => i.id === imageId);
+            if (img) {
+                setCropBox({
+                    imageId,
+                    x: img.x,
+                    y: img.y,
+                    width: img.width,
+                    height: img.height,
+                });
+            }
+        }
+    }, [mapImagePosition, mapImageSize, uploadedImages]);
+
+    // Apply crop to an image
+    const handleApplyCrop = useCallback(async () => {
+        if (!cropBox) return;
+
+        const isBackground = cropBox.imageId === 'background';
+        const targetImage = isBackground ? mapImage : uploadedImages.find(i => i.id === cropBox.imageId)?.image;
+
+        if (!targetImage) {
+            toast.error('No image to crop');
+            return;
+        }
+
+        // Get image properties
+        const imgX = isBackground ? mapImagePosition.x : (uploadedImages.find(i => i.id === cropBox.imageId)?.x ?? 0);
+        const imgY = isBackground ? mapImagePosition.y : (uploadedImages.find(i => i.id === cropBox.imageId)?.y ?? 0);
+        const imgWidth = isBackground ? mapImageSize.width : (uploadedImages.find(i => i.id === cropBox.imageId)?.width ?? 0);
+        const imgHeight = isBackground ? mapImageSize.height : (uploadedImages.find(i => i.id === cropBox.imageId)?.height ?? 0);
+
+        // Calculate crop region relative to original image
+        const cropX = Math.max(0, cropBox.x - imgX);
+        const cropY = Math.max(0, cropBox.y - imgY);
+        const cropWidth = Math.min(cropBox.width, imgWidth - cropX);
+        const cropHeight = Math.min(cropBox.height, imgHeight - cropY);
+
+        // Calculate scale from displayed size to original image size
+        const scaleX = targetImage.naturalWidth / imgWidth;
+        const scaleY = targetImage.naturalHeight / imgHeight;
+
+        // Create a canvas to crop the image
+        const canvas = document.createElement('canvas');
+        canvas.width = cropWidth * scaleX;
+        canvas.height = cropHeight * scaleY;
+        const ctx = canvas.getContext('2d');
+
+        if (!ctx) {
+            toast.error('Failed to create canvas for cropping');
+            return;
+        }
+
+        // Draw the cropped portion
+        ctx.drawImage(
+            targetImage,
+            cropX * scaleX,
+            cropY * scaleY,
+            cropWidth * scaleX,
+            cropHeight * scaleY,
+            0,
+            0,
+            cropWidth * scaleX,
+            cropHeight * scaleY
+        );
+
+        // Convert to blob and upload
+        canvas.toBlob(async (blob) => {
+            if (!blob) {
+                toast.error('Failed to create cropped image');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('image', blob, 'cropped-image.png');
+
+            try {
+                const response = await fetch(
+                    `${API_URL}/api/admin/stores/${storeId}/map/image`,
+                    { method: 'POST', body: formData, headers: getAuthHeaders() }
+                );
+
+                if (!response.ok) {
+                    throw new Error('Failed to upload cropped image');
+                }
+
+                const data = await response.json();
+
+                // Load the new image
+                const newImg = new Image();
+                newImg.crossOrigin = 'anonymous';
+                newImg.onload = () => {
+                    if (isBackground) {
+                        // Update background image
+                        setMapImage(newImg);
+                        setMapImageUrl(data.imageUrl);
+                        setMapImagePosition({ x: cropBox.x, y: cropBox.y });
+                        setMapImageSize({ width: cropWidth, height: cropHeight });
+                        setMapImageRotation(0);
+                    } else {
+                        // Update uploaded image
+                        setUploadedImages(prev => prev.map(img =>
+                            img.id === cropBox.imageId
+                                ? {
+                                    ...img,
+                                    image: newImg,
+                                    url: data.imageUrl,
+                                    x: cropBox.x,
+                                    y: cropBox.y,
+                                    width: cropWidth,
+                                    height: cropHeight,
+                                    rotation: 0,
+                                    eraserStrokes: [],
+                                }
+                                : img
+                        ));
+                    }
+
+                    // Clear crop box and disable crop mode
+                    setCropBox(null);
+                    setCropModeEnabled(false);
+                    setHasUnsavedChanges(true);
+                    toast.success('Image cropped successfully');
+                };
+                newImg.src = `${API_URL}${data.imageUrl}`;
+            } catch (error) {
+                console.error('Crop error:', error);
+                toast.error('Failed to apply crop');
+            }
+        }, 'image/png');
+    }, [cropBox, mapImage, mapImagePosition, mapImageSize, uploadedImages, storeId]);
 
     // Deep clone a single element
     const deepCloneElement = useCallback((el: MapElement): MapElement => {
@@ -2756,6 +3186,12 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     break;
                 case 'escape':
                     setContextMenu(null); // Close context menu
+                    // If in crop mode, cancel it but keep image selected
+                    if (cropModeEnabled) {
+                        setCropModeEnabled(false);
+                        setCropBox(null);
+                        break;
+                    }
                     setSelectedElementIds([]);
                     setSelectedImageIds([]);
                     setIsImageSelected(false);
@@ -2884,6 +3320,26 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     }));
                 }
             }
+        }
+
+        // Update element history if any tracked property changed
+        // Only pass DEFINED values to avoid overwriting existing history values with undefined
+        const historyUpdates: Partial<Omit<ElementHistoryEntry, 'id' | 'type' | 'timestamp'>> = {};
+        if (updates.width !== undefined) historyUpdates.width = updates.width;
+        if (updates.height !== undefined) historyUpdates.height = updates.height;
+        if (updates.fillColor !== undefined) historyUpdates.fillColor = updates.fillColor;
+        if (updates.fillOpacity !== undefined) historyUpdates.fillOpacity = updates.fillOpacity;
+        if (updates.strokeColor !== undefined) historyUpdates.strokeColor = updates.strokeColor;
+        if (updates.strokeWidth !== undefined) historyUpdates.strokeWidth = updates.strokeWidth;
+        if (updates.strokeOpacity !== undefined) historyUpdates.strokeOpacity = updates.strokeOpacity;
+        if (updates.strokeStyle !== undefined) historyUpdates.strokeStyle = updates.strokeStyle;
+        if (updates.rotation !== undefined) historyUpdates.rotation = updates.rotation;
+        if (updates.cornerRadius !== undefined) historyUpdates.cornerRadius = updates.cornerRadius;
+        if (updates.sides !== undefined) historyUpdates.sides = updates.sides;
+        if (updates.gradient !== undefined) historyUpdates.gradient = updates.gradient;
+
+        if (Object.keys(historyUpdates).length > 0) {
+            updateElementHistory(id, historyUpdates);
         }
 
         // Use callback form to avoid stale state issues
@@ -3162,6 +3618,37 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     const handleToggleLock = (id: string) => {
         updateElement(id, { locked: !elements.find(el => el.id === id)?.locked });
     };
+
+    // Image visibility handlers for LayersPanel
+    const handleToggleImageVisibility = useCallback((id: string) => {
+        setUploadedImages(prev => prev.map(img =>
+            img.id === id ? { ...img, visible: !img.visible } : img
+        ));
+        setHasUnsavedChanges(true);
+    }, []);
+
+    const handleToggleBackgroundVisibility = useCallback(() => {
+        setMapImageVisible(prev => !prev);
+        setHasUnsavedChanges(true);
+    }, []);
+
+    const handleDeleteImageFromLayers = useCallback((id: string) => {
+        setUploadedImages(prev => prev.filter(img => img.id !== id));
+        setSelectedImageIds(prev => prev.filter(imgId => imgId !== id));
+        setHasUnsavedChanges(true);
+    }, []);
+
+    const handleSelectImageFromLayers = useCallback((id: string) => {
+        setSelectedImageIds([id]);
+        setSelectedElementIds([]);
+        setIsImageSelected(false);
+    }, []);
+
+    const handleSelectBackgroundFromLayers = useCallback(() => {
+        setIsImageSelected(true);
+        setSelectedElementIds([]);
+        setSelectedImageIds([]);
+    }, []);
 
     const handleReorderElements = (newElements: MapElement[]) => {
         setElements(newElements);
@@ -3909,9 +4396,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             height={element.height}
                             {...getGradientProps(element)}
                             opacity={element.fillOpacity}
-                            stroke={element.strokeColor}
+                            stroke={applyOpacityToColor(element.strokeColor, element.strokeOpacity)}
                             strokeWidth={element.strokeWidth}
-                            strokeOpacity={element.strokeOpacity}
                             cornerRadius={element.cornerRadius}
                             dash={getStrokeDash(element.strokeStyle)}
                         />
@@ -3936,9 +4422,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             radius={element.width / 2}
                             {...getGradientProps(element)}
                             opacity={element.fillOpacity}
-                            stroke={element.strokeColor}
+                            stroke={applyOpacityToColor(element.strokeColor, element.strokeOpacity)}
                             strokeWidth={element.strokeWidth}
-                            strokeOpacity={element.strokeOpacity}
                             dash={getStrokeDash(element.strokeStyle)}
                         />
                         {renderLabel()}
@@ -3952,9 +4437,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             radius={element.width / 2}
                             fill={element.fillColor}
                             opacity={element.fillOpacity}
-                            stroke={element.strokeColor}
+                            stroke={applyOpacityToColor(element.strokeColor, element.strokeOpacity)}
                             strokeWidth={element.strokeWidth}
-                            strokeOpacity={element.strokeOpacity}
                             dash={getStrokeDash(element.strokeStyle)}
                         />
                         {renderLabel()}
@@ -3968,9 +4452,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             closed={true}
                             fill={element.fillColor}
                             opacity={element.fillOpacity}
-                            stroke={element.strokeColor}
+                            stroke={applyOpacityToColor(element.strokeColor, element.strokeOpacity)}
                             strokeWidth={element.strokeWidth}
-                            strokeOpacity={element.strokeOpacity}
                             lineJoin="round"
                             cornerRadius={element.cornerRadius || 0}
                             dash={getStrokeDash(element.strokeStyle)}
@@ -3986,9 +4469,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             closed={true}
                             fill={element.fillColor}
                             opacity={element.fillOpacity}
-                            stroke={element.strokeColor}
+                            stroke={applyOpacityToColor(element.strokeColor, element.strokeOpacity)}
                             strokeWidth={element.strokeWidth}
-                            strokeOpacity={element.strokeOpacity}
                             lineJoin="round"
                             cornerRadius={element.cornerRadius || 0}
                             dash={getStrokeDash(element.strokeStyle)}
@@ -4004,9 +4486,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             radius={element.width / 2}
                             fill={element.fillColor}
                             opacity={element.fillOpacity}
-                            stroke={element.strokeColor}
+                            stroke={applyOpacityToColor(element.strokeColor, element.strokeOpacity)}
                             strokeWidth={element.strokeWidth}
-                            strokeOpacity={element.strokeOpacity}
                             dash={getStrokeDash(element.strokeStyle)}
                         />
                         {renderLabel()}
@@ -4017,9 +4498,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     <Group key={element.id} {...commonProps}>
                         <Line
                             points={element.points || [0, 0, 100, 0]}
-                            stroke={element.strokeColor}
+                            stroke={applyOpacityToColor(element.strokeColor, element.strokeOpacity)}
                             strokeWidth={element.strokeWidth}
-                            strokeOpacity={element.strokeOpacity}
                             hitStrokeWidth={40}
                             dash={getStrokeDash(element.strokeStyle)}
                         />
@@ -4031,10 +4511,9 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     <Group key={element.id} {...commonProps}>
                         <Arrow
                             points={element.points || [0, 0, 100, 0]}
-                            stroke={element.strokeColor}
+                            stroke={applyOpacityToColor(element.strokeColor, element.strokeOpacity)}
                             strokeWidth={element.strokeWidth}
-                            strokeOpacity={element.strokeOpacity}
-                            fill={element.strokeColor}
+                            fill={applyOpacityToColor(element.strokeColor, element.strokeOpacity)}
                             hitStrokeWidth={40}
                             dash={getStrokeDash(element.strokeStyle)}
                         />
@@ -4097,9 +4576,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     <Group key={element.id} {...commonProps}>
                         <Line
                             points={element.freehandPoints || []}
-                            stroke={element.strokeColor}
+                            stroke={applyOpacityToColor(element.strokeColor, element.strokeOpacity)}
                             strokeWidth={element.strokeWidth}
-                            strokeOpacity={element.strokeOpacity}
                             tension={0.5}
                             lineCap="round"
                             lineJoin="round"
@@ -4854,6 +5332,12 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                 }
 
                                 if (clickedOnEmpty && tool === 'select') {
+                                    // In crop mode, don't clear selections or start selection box
+                                    // User should only interact with the crop box
+                                    if (cropModeEnabled) {
+                                        return;
+                                    }
+
                                     // Clear any existing selection when starting a new selection box
                                     setSelectedElementIds([]);
                                     setIsImageSelected(false);
@@ -5034,37 +5518,14 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                         }}
                     >
                         <Layer>
-                            {/* Capture Area Boundary - only shown when toggled */}
-                            {showCaptureArea && (
-                                <Group name="capture-area-group" listening={false}>
-                                    {/* Dashed border showing what will be visible in preview/live */}
-                                    <Rect
-                                        name="capture-boundary"
-                                        x={0}
-                                        y={0}
-                                        width={CANVAS_WIDTH}
-                                        height={CANVAS_HEIGHT}
-                                        stroke="#3b82f6"
-                                        strokeWidth={2}
-                                        fill="transparent"
-                                        listening={false}
-                                        dash={[8, 4]}
-                                    />
-                                    {/* Corner markers for emphasis */}
-                                    <Line points={[0, 25, 0, 0, 25, 0]} stroke="#3b82f6" strokeWidth={3} listening={false} />
-                                    <Line points={[CANVAS_WIDTH - 25, 0, CANVAS_WIDTH, 0, CANVAS_WIDTH, 25]} stroke="#3b82f6" strokeWidth={3} listening={false} />
-                                    <Line points={[0, CANVAS_HEIGHT - 25, 0, CANVAS_HEIGHT, 25, CANVAS_HEIGHT]} stroke="#3b82f6" strokeWidth={3} listening={false} />
-                                    <Line points={[CANVAS_WIDTH - 25, CANVAS_HEIGHT, CANVAS_WIDTH, CANVAS_HEIGHT, CANVAS_WIDTH, CANVAS_HEIGHT - 25]} stroke="#3b82f6" strokeWidth={3} listening={false} />
-                                </Group>
-                            )}
-
                             {/* Background Image with Eraser - Cached Group for composite operations */}
-                            {mapImage && (
+                            {mapImage && mapImageVisible && (
                                 <Group
                                     ref={imageGroupRef}
                                     name="background-image-group"
                                     x={mapImagePosition.x}
                                     y={mapImagePosition.y}
+                                    rotation={mapImageRotation}
                                     draggable={tool === 'select'}
                                     onClick={(e) => {
                                         if (tool === 'select') {
@@ -5198,6 +5659,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                         const node = e.target;
                                         const scaleX = node.scaleX();
                                         const scaleY = node.scaleY();
+                                        const newRotation = node.rotation();
 
                                         // Reset scale
                                         node.scaleX(1);
@@ -5211,6 +5673,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                             width: Math.max(50, mapImageSize.width * scaleX),
                                             height: Math.max(50, mapImageSize.height * scaleY),
                                         });
+                                        setMapImageRotation(newRotation);
                                         setHasUnsavedChanges(true);
                                     }}
                                 >
@@ -5221,7 +5684,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                         image={mapImage}
                                         width={mapImageSize.width}
                                         height={mapImageSize.height}
-                                        opacity={0.9}
+                                        opacity={mapImageOpacity}
                                     />
 
                                     {/* Eraser strokes - use destination-out to actually cut from the image */}
@@ -5256,11 +5719,68 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                             listening={false}
                                         />
                                     )}
+
+                                    {/* Crop Grid Overlay - shown when crop mode is enabled and background image is selected */}
+                                    {cropModeEnabled && isImageSelected && (
+                                        <Group name="crop-grid-overlay" listening={false}>
+                                            {/* 3x3 Rule of Thirds Grid */}
+                                            {/* Vertical lines */}
+                                            <Line
+                                                points={[mapImageSize.width / 3, 0, mapImageSize.width / 3, mapImageSize.height]}
+                                                stroke="rgba(255, 255, 255, 0.7)"
+                                                strokeWidth={1}
+                                                listening={false}
+                                            />
+                                            <Line
+                                                points={[(mapImageSize.width * 2) / 3, 0, (mapImageSize.width * 2) / 3, mapImageSize.height]}
+                                                stroke="rgba(255, 255, 255, 0.7)"
+                                                strokeWidth={1}
+                                                listening={false}
+                                            />
+                                            {/* Horizontal lines */}
+                                            <Line
+                                                points={[0, mapImageSize.height / 3, mapImageSize.width, mapImageSize.height / 3]}
+                                                stroke="rgba(255, 255, 255, 0.7)"
+                                                strokeWidth={1}
+                                                listening={false}
+                                            />
+                                            <Line
+                                                points={[0, (mapImageSize.height * 2) / 3, mapImageSize.width, (mapImageSize.height * 2) / 3]}
+                                                stroke="rgba(255, 255, 255, 0.7)"
+                                                strokeWidth={1}
+                                                listening={false}
+                                            />
+                                            {/* Center crosshair */}
+                                            <Line
+                                                points={[mapImageSize.width / 2 - 15, mapImageSize.height / 2, mapImageSize.width / 2 + 15, mapImageSize.height / 2]}
+                                                stroke="rgba(255, 255, 255, 0.9)"
+                                                strokeWidth={1.5}
+                                                listening={false}
+                                            />
+                                            <Line
+                                                points={[mapImageSize.width / 2, mapImageSize.height / 2 - 15, mapImageSize.width / 2, mapImageSize.height / 2 + 15]}
+                                                stroke="rgba(255, 255, 255, 0.9)"
+                                                strokeWidth={1.5}
+                                                listening={false}
+                                            />
+                                            {/* Border outline */}
+                                            <Rect
+                                                x={0}
+                                                y={0}
+                                                width={mapImageSize.width}
+                                                height={mapImageSize.height}
+                                                stroke="#3b82f6"
+                                                strokeWidth={2}
+                                                fill="transparent"
+                                                listening={false}
+                                            />
+                                        </Group>
+                                    )}
                                 </Group>
                             )}
 
                             {/* Additional Uploaded Images - Wrapped in cached Groups for eraser support */}
-                            {uploadedImages.map((uploadedImg) => (
+                            {uploadedImages.filter(img => img.visible !== false).map((uploadedImg) => (
                                 <Group
                                     key={uploadedImg.id}
                                     id={`image-group-${uploadedImg.id}`}
@@ -5268,6 +5788,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                     y={uploadedImg.y}
                                     width={uploadedImg.width}
                                     height={uploadedImg.height}
+                                    rotation={uploadedImg.rotation ?? 0}
                                     draggable={tool === 'select'}
                                     ref={(node) => {
                                         // Cache the group when it mounts (required for eraser composite operation)
@@ -5313,6 +5834,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                                 y: img.y,
                                                 width: img.width,
                                                 height: img.height,
+                                                rotation: img.rotation ?? 0,
+                                                opacity: img.opacity ?? 0.9,
                                                 eraserStrokes: img.eraserStrokes,
                                             }))
                                         ));
@@ -5419,6 +5942,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                                 y: img.y,
                                                 width: img.width,
                                                 height: img.height,
+                                                rotation: img.rotation ?? 0,
+                                                opacity: img.opacity ?? 0.9,
                                                 eraserStrokes: img.eraserStrokes,
                                             }));
                                             saveImagesToHistory(previousImages as any, afterImages as any);
@@ -5439,6 +5964,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                                 y: img.y,
                                                 width: img.width,
                                                 height: img.height,
+                                                rotation: img.rotation ?? 0,
+                                                opacity: img.opacity ?? 0.9,
                                                 eraserStrokes: img.eraserStrokes,
                                             }))
                                         ));
@@ -5447,10 +5974,11 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                         const node = e.target;
                                         const scaleX = node.scaleX();
                                         const scaleY = node.scaleY();
+                                        const newRotation = node.rotation();
                                         node.scaleX(1);
                                         node.scaleY(1);
 
-                                        // Calculate new state
+                                        // Calculate new state including rotation
                                         const newImages = uploadedImagesRef.current.map(img =>
                                             img.id === uploadedImg.id
                                                 ? {
@@ -5459,6 +5987,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                                     y: node.y(),
                                                     width: Math.max(20, img.width * scaleX),
                                                     height: Math.max(20, img.height * scaleY),
+                                                    rotation: newRotation,
                                                 }
                                                 : img
                                         );
@@ -5473,6 +6002,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                                 y: img.y,
                                                 width: img.width,
                                                 height: img.height,
+                                                rotation: img.rotation ?? 0,
+                                                opacity: img.opacity ?? 0.9,
                                                 eraserStrokes: img.eraserStrokes,
                                             }));
                                             saveImagesToHistory(previousImages as any, afterImages as any);
@@ -5489,7 +6020,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                         image={uploadedImg.image}
                                         width={uploadedImg.width}
                                         height={uploadedImg.height}
-                                        opacity={0.9}
+                                        opacity={uploadedImg.opacity ?? 0.9}
                                     />
 
                                     {/* Eraser strokes - use destination-out to cut from the image */}
@@ -5523,6 +6054,63 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                             globalCompositeOperation="destination-out"
                                             listening={false}
                                         />
+                                    )}
+
+                                    {/* Crop Grid Overlay - shown when crop mode is enabled and image is selected */}
+                                    {cropModeEnabled && selectedImageIds.includes(uploadedImg.id) && (
+                                        <Group name="crop-grid-overlay" listening={false}>
+                                            {/* 3x3 Rule of Thirds Grid */}
+                                            {/* Vertical lines */}
+                                            <Line
+                                                points={[uploadedImg.width / 3, 0, uploadedImg.width / 3, uploadedImg.height]}
+                                                stroke="rgba(255, 255, 255, 0.7)"
+                                                strokeWidth={1}
+                                                listening={false}
+                                            />
+                                            <Line
+                                                points={[(uploadedImg.width * 2) / 3, 0, (uploadedImg.width * 2) / 3, uploadedImg.height]}
+                                                stroke="rgba(255, 255, 255, 0.7)"
+                                                strokeWidth={1}
+                                                listening={false}
+                                            />
+                                            {/* Horizontal lines */}
+                                            <Line
+                                                points={[0, uploadedImg.height / 3, uploadedImg.width, uploadedImg.height / 3]}
+                                                stroke="rgba(255, 255, 255, 0.7)"
+                                                strokeWidth={1}
+                                                listening={false}
+                                            />
+                                            <Line
+                                                points={[0, (uploadedImg.height * 2) / 3, uploadedImg.width, (uploadedImg.height * 2) / 3]}
+                                                stroke="rgba(255, 255, 255, 0.7)"
+                                                strokeWidth={1}
+                                                listening={false}
+                                            />
+                                            {/* Center crosshair */}
+                                            <Line
+                                                points={[uploadedImg.width / 2 - 10, uploadedImg.height / 2, uploadedImg.width / 2 + 10, uploadedImg.height / 2]}
+                                                stroke="rgba(255, 255, 255, 0.9)"
+                                                strokeWidth={1.5}
+                                                listening={false}
+                                            />
+                                            <Line
+                                                points={[uploadedImg.width / 2, uploadedImg.height / 2 - 10, uploadedImg.width / 2, uploadedImg.height / 2 + 10]}
+                                                stroke="rgba(255, 255, 255, 0.9)"
+                                                strokeWidth={1.5}
+                                                listening={false}
+                                            />
+                                            {/* Border outline */}
+                                            <Rect
+                                                x={0}
+                                                y={0}
+                                                width={uploadedImg.width}
+                                                height={uploadedImg.height}
+                                                stroke="#10b981"
+                                                strokeWidth={2}
+                                                fill="transparent"
+                                                listening={false}
+                                            />
+                                        </Group>
                                     )}
                                 </Group>
                             ))}
@@ -5720,6 +6308,136 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                     />
                                 );
                             })()}
+
+                            {/* Capture Area Boundary - rendered AFTER all elements so it's always visible on top */}
+                            {showCaptureArea && (
+                                <Group name="capture-area-group" listening={false}>
+                                    {/* Semi-transparent overlay outside capture area to dim out-of-bounds */}
+                                    {/* Top overlay */}
+                                    <Rect
+                                        x={-2000}
+                                        y={-2000}
+                                        width={4000 + CANVAS_WIDTH}
+                                        height={2000}
+                                        fill="rgba(0, 0, 0, 0.3)"
+                                        listening={false}
+                                    />
+                                    {/* Bottom overlay */}
+                                    <Rect
+                                        x={-2000}
+                                        y={CANVAS_HEIGHT}
+                                        width={4000 + CANVAS_WIDTH}
+                                        height={2000}
+                                        fill="rgba(0, 0, 0, 0.3)"
+                                        listening={false}
+                                    />
+                                    {/* Left overlay */}
+                                    <Rect
+                                        x={-2000}
+                                        y={0}
+                                        width={2000}
+                                        height={CANVAS_HEIGHT}
+                                        fill="rgba(0, 0, 0, 0.3)"
+                                        listening={false}
+                                    />
+                                    {/* Right overlay */}
+                                    <Rect
+                                        x={CANVAS_WIDTH}
+                                        y={0}
+                                        width={2000}
+                                        height={CANVAS_HEIGHT}
+                                        fill="rgba(0, 0, 0, 0.3)"
+                                        listening={false}
+                                    />
+
+                                    {/* Dashed border showing what will be captured */}
+                                    <Rect
+                                        name="capture-boundary"
+                                        x={0}
+                                        y={0}
+                                        width={CANVAS_WIDTH}
+                                        height={CANVAS_HEIGHT}
+                                        stroke="#3b82f6"
+                                        strokeWidth={3}
+                                        fill="transparent"
+                                        listening={false}
+                                        dash={[10, 6]}
+                                    />
+                                    {/* Corner markers for emphasis */}
+                                    <Line points={[0, 30, 0, 0, 30, 0]} stroke="#3b82f6" strokeWidth={4} listening={false} />
+                                    <Line points={[CANVAS_WIDTH - 30, 0, CANVAS_WIDTH, 0, CANVAS_WIDTH, 30]} stroke="#3b82f6" strokeWidth={4} listening={false} />
+                                    <Line points={[0, CANVAS_HEIGHT - 30, 0, CANVAS_HEIGHT, 30, CANVAS_HEIGHT]} stroke="#3b82f6" strokeWidth={4} listening={false} />
+                                    <Line points={[CANVAS_WIDTH - 30, CANVAS_HEIGHT, CANVAS_WIDTH, CANVAS_HEIGHT, CANVAS_WIDTH, CANVAS_HEIGHT - 30]} stroke="#3b82f6" strokeWidth={4} listening={false} />
+                                </Group>
+                            )}
+
+                            {/* Crop Box - shown when crop mode is enabled */}
+                            {cropModeEnabled && cropBox && (
+                                <Rect
+                                    ref={cropBoxRef}
+                                    name="crop-box"
+                                    x={cropBox.x}
+                                    y={cropBox.y}
+                                    width={cropBox.width}
+                                    height={cropBox.height}
+                                    fill="rgba(59, 130, 246, 0.15)"
+                                    stroke="#3b82f6"
+                                    strokeWidth={2}
+                                    dash={[8, 4]}
+                                    draggable
+                                    onClick={(e) => {
+                                        // Stop propagation to prevent deselection
+                                        e.cancelBubble = true;
+                                    }}
+                                    onTap={(e) => {
+                                        // Stop propagation to prevent deselection on touch
+                                        e.cancelBubble = true;
+                                    }}
+                                    onDragEnd={(e) => {
+                                        setCropBox(prev => prev ? {
+                                            ...prev,
+                                            x: e.target.x(),
+                                            y: e.target.y(),
+                                        } : null);
+                                    }}
+                                    onTransformEnd={(e) => {
+                                        const node = e.target;
+                                        const scaleX = node.scaleX();
+                                        const scaleY = node.scaleY();
+                                        node.scaleX(1);
+                                        node.scaleY(1);
+                                        setCropBox(prev => prev ? {
+                                            ...prev,
+                                            x: node.x(),
+                                            y: node.y(),
+                                            width: Math.max(20, prev.width * scaleX),
+                                            height: Math.max(20, prev.height * scaleY),
+                                        } : null);
+                                    }}
+                                />
+                            )}
+
+                            {/* Crop Box Transformer */}
+                            {cropModeEnabled && cropBox && (
+                                <Transformer
+                                    ref={cropBoxTransformerRef}
+                                    nodes={cropBoxRef.current ? [cropBoxRef.current] : []}
+                                    anchorSize={8}
+                                    anchorCornerRadius={2}
+                                    borderStroke="#3b82f6"
+                                    borderStrokeWidth={2}
+                                    anchorFill="#ffffff"
+                                    anchorStroke="#3b82f6"
+                                    rotateEnabled={false}
+                                    keepRatio={false}
+                                    boundBoxFunc={(oldBox, newBox) => {
+                                        if (newBox.width < 20 || newBox.height < 20) {
+                                            return oldBox;
+                                        }
+                                        return newBox;
+                                    }}
+                                />
+                            )}
 
                             {/* Transformer */}
                             <Transformer
@@ -6056,6 +6774,12 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             >
                                 Links
                             </TabsTrigger>
+                            <TabsTrigger
+                                value="history"
+                                className="flex-1 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent px-4 py-2"
+                            >
+                                History
+                            </TabsTrigger>
                         </TabsList>
 
                         <TabsContent value="properties" className="flex-1 m-0 overflow-hidden">
@@ -6079,6 +6803,42 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                 hasEraserStrokes={eraserStrokes.length > 0 || uploadedImages.some(img => img.eraserStrokes.length > 0)}
                                 onFlipHorizontal={handleFlipHorizontal}
                                 onFlipVertical={handleFlipVertical}
+                                // Image properties
+                                selectedImageIds={selectedImageIds}
+                                uploadedImages={uploadedImages.map(img => ({
+                                    id: img.id,
+                                    url: img.url,
+                                    x: img.x,
+                                    y: img.y,
+                                    width: img.width,
+                                    height: img.height,
+                                    rotation: img.rotation ?? 0,
+                                    opacity: img.opacity ?? 0.9,
+                                    eraserStrokes: img.eraserStrokes,
+                                }))}
+                                onUpdateImage={handleUpdateImage}
+                                isBackgroundImageSelected={isImageSelected}
+                                backgroundImagePosition={mapImagePosition}
+                                backgroundImageSize={mapImageSize}
+                                backgroundImageRotation={mapImageRotation}
+                                backgroundImageOpacity={mapImageOpacity}
+                                onUpdateBackgroundImage={handleUpdateBackgroundImage}
+                                cropModeEnabled={cropModeEnabled}
+                                onCropModeChange={(enabled) => {
+                                    setCropModeEnabled(enabled);
+                                    if (enabled) {
+                                        // Initialize crop box for currently selected image
+                                        if (isImageSelected) {
+                                            initializeCropBox('background');
+                                        } else if (selectedImageIds.length === 1) {
+                                            initializeCropBox(selectedImageIds[0]);
+                                        }
+                                    } else {
+                                        setCropBox(null);
+                                    }
+                                }}
+                                onApplyCrop={handleApplyCrop}
+                                cropBox={cropBox}
                             />
                         </TabsContent>
 
@@ -6086,7 +6846,11 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             <LayersPanel
                                 elements={elements}
                                 selectedId={selectedElementIds.length > 0 ? selectedElementIds[0] : null}
-                                onSelect={(id) => setSelectedElementIds([id])}
+                                onSelect={(id) => {
+                                    setSelectedElementIds(id ? [id] : []);
+                                    setSelectedImageIds([]);
+                                    setIsImageSelected(false);
+                                }}
                                 onToggleVisibility={handleToggleVisibility}
                                 onToggleLock={handleToggleLock}
                                 onReorder={handleReorderElements}
@@ -6094,6 +6858,26 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                     // Directly update the element's name (inline editing in LayersPanel)
                                     updateElement(id, { name });
                                 }}
+                                // Image layer props
+                                uploadedImages={uploadedImages.map(img => ({
+                                    id: img.id,
+                                    url: img.url,
+                                    x: img.x,
+                                    y: img.y,
+                                    width: img.width,
+                                    height: img.height,
+                                    visible: img.visible,
+                                }))}
+                                selectedImageIds={selectedImageIds}
+                                onSelectImage={handleSelectImageFromLayers}
+                                onToggleImageVisibility={handleToggleImageVisibility}
+                                onDeleteImage={handleDeleteImageFromLayers}
+                                // Background image props
+                                hasBackgroundImage={!!mapImage}
+                                isBackgroundSelected={isImageSelected}
+                                onSelectBackground={handleSelectBackgroundFromLayers}
+                                backgroundImageVisible={mapImageVisible}
+                                onToggleBackgroundVisibility={handleToggleBackgroundVisibility}
                             />
                         </TabsContent>
 
@@ -6102,6 +6886,14 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                 element={selectedElement}
                                 storeId={storeId}
                                 onLinksChanged={() => setHasLinkChanges(true)}
+                            />
+                        </TabsContent>
+
+                        <TabsContent value="history" className="flex-1 m-0 overflow-hidden">
+                            <HistoryPanel
+                                history={elementHistory}
+                                onPlaceElement={placeElementFromHistory}
+                                onClearHistory={clearElementHistory}
                             />
                         </TabsContent>
                     </Tabs>

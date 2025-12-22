@@ -9,10 +9,24 @@ import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { ArrowUp, ArrowDown, ChevronUp, ChevronDown, Eraser, Undo2, Lock, Unlock, Link2, FlipHorizontal2, FlipVertical2 } from 'lucide-react';
+import { ArrowUp, ArrowDown, ChevronUp, ChevronDown, Eraser, Undo2, Lock, Unlock, Link2, FlipHorizontal2, FlipVertical2, Crop, RotateCw } from 'lucide-react';
 import type { MapElement, AnimationStyle, Tool, StrokeStyle, TextDecoration, Gradient } from './types';
 import { animationStyleLabels, STROKE_DASH_PATTERNS } from './types';
 import GradientEditor from './GradientEditor';
+import ColorPicker from './ColorPicker';
+
+// Uploaded image data type
+interface UploadedImageData {
+  id: string;
+  url: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation?: number;
+  opacity?: number;
+  eraserStrokes: number[][];
+}
 
 interface PropertiesPanelProps {
   element: MapElement | null;
@@ -27,6 +41,21 @@ interface PropertiesPanelProps {
   onEraserSizeChange?: (size: number) => void;
   onClearEraserStrokes?: () => void;
   hasEraserStrokes?: boolean;
+  // Image props
+  selectedImageIds?: string[];
+  uploadedImages?: UploadedImageData[];
+  onUpdateImage?: (id: string, updates: Partial<UploadedImageData>) => void;
+  isBackgroundImageSelected?: boolean;
+  backgroundImagePosition?: { x: number; y: number };
+  backgroundImageSize?: { width: number; height: number };
+  backgroundImageRotation?: number;
+  backgroundImageOpacity?: number;
+  onUpdateBackgroundImage?: (updates: Partial<{ x: number; y: number; width: number; height: number; rotation: number; opacity: number }>) => void;
+  // Crop mode
+  cropModeEnabled?: boolean;
+  onCropModeChange?: (enabled: boolean) => void;
+  onApplyCrop?: () => void;
+  cropBox?: { imageId: string | 'background'; x: number; y: number; width: number; height: number } | null;
 }
 
 const fontFamilies = [
@@ -62,6 +91,21 @@ const PropertiesPanel = ({
   onEraserSizeChange,
   onClearEraserStrokes,
   hasEraserStrokes = false,
+  // Image props
+  selectedImageIds = [],
+  uploadedImages = [],
+  onUpdateImage,
+  isBackgroundImageSelected = false,
+  backgroundImagePosition,
+  backgroundImageSize,
+  backgroundImageRotation = 0,
+  backgroundImageOpacity = 0.9,
+  onUpdateBackgroundImage,
+  // Crop mode
+  cropModeEnabled = false,
+  onCropModeChange,
+  onApplyCrop,
+  cropBox,
 }: PropertiesPanelProps) => {
   // Aspect ratio lock state
   const [aspectRatioLocked, setAspectRatioLocked] = useState(false);
@@ -152,6 +196,176 @@ const PropertiesPanel = ({
               <p className="text-xs text-muted-foreground">
                 <span className="font-medium text-foreground">Tip:</span> Click and drag on the background image to erase parts of it.
               </p>
+            </div>
+          </div>
+        </ScrollArea>
+      </div>
+    );
+  }
+
+  // Get selected image for image properties
+  const selectedImage = selectedImageIds.length === 1
+    ? uploadedImages.find(img => img.id === selectedImageIds[0])
+    : null;
+
+  // Show image properties when an image is selected (background or uploaded)
+  if (!element && (isBackgroundImageSelected || selectedImage)) {
+    const isBackground = isBackgroundImageSelected;
+    const imgX = isBackground ? (backgroundImagePosition?.x ?? 0) : (selectedImage?.x ?? 0);
+    const imgY = isBackground ? (backgroundImagePosition?.y ?? 0) : (selectedImage?.y ?? 0);
+    const imgWidth = isBackground ? (backgroundImageSize?.width ?? 0) : (selectedImage?.width ?? 0);
+    const imgHeight = isBackground ? (backgroundImageSize?.height ?? 0) : (selectedImage?.height ?? 0);
+    const imgRotation = isBackground ? backgroundImageRotation : (selectedImage?.rotation ?? 0);
+    const imgOpacity = isBackground ? backgroundImageOpacity : (selectedImage?.opacity ?? 0.9);
+
+    const handleImageUpdate = (updates: Partial<{ x: number; y: number; width: number; height: number; rotation: number; opacity: number }>) => {
+      if (isBackground && onUpdateBackgroundImage) {
+        onUpdateBackgroundImage(updates);
+      } else if (selectedImage && onUpdateImage) {
+        onUpdateImage(selectedImage.id, updates);
+      }
+    };
+
+    return (
+      <div className="h-full bg-card border-l border-border overflow-hidden flex flex-col">
+        <div className="p-4 border-b border-border">
+          <h3 className="font-semibold text-sm">
+            {isBackground ? 'Background Image' : 'Image Properties'}
+          </h3>
+        </div>
+        <ScrollArea className="flex-1">
+          <div className="p-4 space-y-4">
+            {/* Crop Mode Toggle */}
+            <div className="space-y-2">
+              <Label className="text-xs font-medium">Crop Mode</Label>
+              <Button
+                variant={cropModeEnabled ? "default" : "outline"}
+                size="sm"
+                className="w-full"
+                onClick={() => onCropModeChange?.(!cropModeEnabled)}
+              >
+                <Crop className="h-4 w-4 mr-2" />
+                {cropModeEnabled ? 'Crop Mode On' : 'Enable Crop Mode'}
+              </Button>
+              {cropModeEnabled && cropBox && (
+                <div className="space-y-2 mt-2">
+                  <p className="text-xs text-muted-foreground">
+                    Resize the crop box on the canvas, then click Apply to crop the image.
+                  </p>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="default"
+                      size="sm"
+                      className="flex-1"
+                      onClick={() => onApplyCrop?.()}
+                    >
+                      Apply Crop
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-1"
+                      onClick={() => onCropModeChange?.(false)}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <Separator />
+
+            {/* Position */}
+            <div className="space-y-2">
+              <Label className="text-xs font-medium">Position</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <Label className="text-xs text-muted-foreground">X</Label>
+                  <Input
+                    type="number"
+                    value={Math.round(imgX)}
+                    onChange={(e) => handleImageUpdate({ x: parseFloat(e.target.value) || 0 })}
+                    className="h-8"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Y</Label>
+                  <Input
+                    type="number"
+                    value={Math.round(imgY)}
+                    onChange={(e) => handleImageUpdate({ y: parseFloat(e.target.value) || 0 })}
+                    className="h-8"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Size */}
+            <div className="space-y-2">
+              <Label className="text-xs font-medium">Size</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <Label className="text-xs text-muted-foreground">Width</Label>
+                  <Input
+                    type="number"
+                    value={Math.round(imgWidth)}
+                    onChange={(e) => handleImageUpdate({ width: parseFloat(e.target.value) || 50 })}
+                    className="h-8"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Height</Label>
+                  <Input
+                    type="number"
+                    value={Math.round(imgHeight)}
+                    onChange={(e) => handleImageUpdate({ height: parseFloat(e.target.value) || 50 })}
+                    className="h-8"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Rotation */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-medium">Rotation</Label>
+                <span className="text-xs text-muted-foreground">{Math.round(imgRotation)}°</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Slider
+                  value={[imgRotation]}
+                  onValueChange={([value]) => handleImageUpdate({ rotation: value })}
+                  min={0}
+                  max={360}
+                  step={1}
+                  className="flex-1"
+                />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={() => handleImageUpdate({ rotation: 0 })}
+                  title="Reset rotation"
+                >
+                  <RotateCw className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+
+            {/* Opacity */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-medium">Opacity</Label>
+                <span className="text-xs text-muted-foreground">{Math.round(imgOpacity * 100)}%</span>
+              </div>
+              <Slider
+                value={[imgOpacity * 100]}
+                onValueChange={([value]) => handleImageUpdate({ opacity: value / 100 })}
+                min={10}
+                max={100}
+                step={1}
+              />
             </div>
           </div>
         </ScrollArea>
@@ -258,22 +472,11 @@ const PropertiesPanel = ({
                       </Select>
                     </div>
 
-                    <div className="space-y-2">
-                      <Label className="text-xs font-medium">Label Color</Label>
-                      <div className="flex gap-2">
-                        <Input
-                          type="color"
-                          value={element.pinLabelColor || '#ffffff'}
-                          onChange={(e) => update({ pinLabelColor: e.target.value })}
-                          className="w-10 h-8 p-1 cursor-pointer flex-shrink-0"
-                        />
-                        <Input
-                          value={element.pinLabelColor || '#ffffff'}
-                          onChange={(e) => update({ pinLabelColor: e.target.value })}
-                          className="flex-1 h-8 text-sm font-mono min-w-0"
-                        />
-                      </div>
-                    </div>
+                    <ColorPicker
+                      label="Label Color"
+                      color={element.pinLabelColor || '#ffffff'}
+                      onChange={(color) => update({ pinLabelColor: color })}
+                    />
                   </>
                 )}
 
@@ -317,22 +520,11 @@ const PropertiesPanel = ({
                 </div>
 
                 {/* Pin Color */}
-                <div className="space-y-2">
-                  <Label className="text-xs font-medium">Pin Color</Label>
-                  <div className="flex gap-2">
-                    <Input
-                      type="color"
-                      value={element.fillColor || '#6366f1'}
-                      onChange={(e) => throttledColorUpdate(e.target.value)}
-                      className="w-10 h-8 p-1 cursor-pointer flex-shrink-0"
-                    />
-                    <Input
-                      value={element.fillColor || '#6366f1'}
-                      onChange={(e) => update({ fillColor: e.target.value })}
-                      className="flex-1 h-8 text-sm font-mono min-w-0"
-                    />
-                  </div>
-                </div>
+                <ColorPicker
+                  label="Pin Color"
+                  color={element.fillColor || '#6366f1'}
+                  onChange={(color) => update({ fillColor: color })}
+                />
 
                 {isSmartPin && (
                   <div className="p-3 bg-muted/50 rounded-lg">
@@ -407,22 +599,11 @@ const PropertiesPanel = ({
                   </Select>
                 </div>
 
-                <div className="space-y-2">
-                  <Label className="text-xs font-medium">Label Color</Label>
-                  <div className="flex gap-2">
-                    <Input
-                      type="color"
-                      value={element.labelColor || '#000000'}
-                      onChange={(e) => update({ labelColor: e.target.value })}
-                      className="w-10 h-8 p-1 cursor-pointer flex-shrink-0"
-                    />
-                    <Input
-                      value={element.labelColor || '#000000'}
-                      onChange={(e) => update({ labelColor: e.target.value })}
-                      className="flex-1 h-8 text-sm font-mono min-w-0"
-                    />
-                  </div>
-                </div>
+                <ColorPicker
+                  label="Label Color"
+                  color={element.labelColor || '#000000'}
+                  onChange={(color) => update({ labelColor: color })}
+                />
               </div>
 
               <Separator />
@@ -506,22 +687,11 @@ const PropertiesPanel = ({
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <Label className="text-xs font-medium">Text Color</Label>
-                <div className="flex gap-2">
-                  <Input
-                    type="color"
-                    value={element.fillColor}
-                    onChange={(e) => update({ fillColor: e.target.value })}
-                    className="w-10 h-8 p-1 cursor-pointer flex-shrink-0"
-                  />
-                  <Input
-                    value={element.fillColor}
-                    onChange={(e) => update({ fillColor: e.target.value })}
-                    className="flex-1 h-8 text-sm font-mono min-w-0"
-                  />
-                </div>
-              </div>
+              <ColorPicker
+                label="Text Color"
+                color={element.fillColor}
+                onChange={(color) => update({ fillColor: color })}
+              />
 
               {/* Typography Section */}
               <Separator />
@@ -1060,22 +1230,11 @@ const PropertiesPanel = ({
 
                 {/* Solid color picker (shown when gradient type is solid) */}
                 {(!element.gradient || element.gradient.type === 'solid') && (
-                  <>
-                    <Label className="text-xs font-medium">Color</Label>
-                    <div className="flex gap-2">
-                      <Input
-                        type="color"
-                        value={element.fillColor}
-                        onChange={(e) => update({ fillColor: e.target.value })}
-                        className="w-10 h-8 p-1 cursor-pointer flex-shrink-0"
-                      />
-                      <Input
-                        value={element.fillColor}
-                        onChange={(e) => update({ fillColor: e.target.value })}
-                        className="flex-1 h-8 text-sm font-mono min-w-0"
-                      />
-                    </div>
-                  </>
+                  <ColorPicker
+                    label="Color"
+                    color={element.fillColor}
+                    onChange={(color) => update({ fillColor: color })}
+                  />
                 )}
 
                 <div className="space-y-1">
@@ -1099,22 +1258,11 @@ const PropertiesPanel = ({
             <>
               <Separator />
               <div className="space-y-3">
-                <div className="space-y-2">
-                  <Label className="text-xs font-medium">Stroke</Label>
-                  <div className="flex gap-2">
-                    <Input
-                      type="color"
-                      value={element.strokeColor}
-                      onChange={(e) => update({ strokeColor: e.target.value })}
-                      className="w-10 h-8 p-1 cursor-pointer flex-shrink-0"
-                    />
-                    <Input
-                      value={element.strokeColor}
-                      onChange={(e) => update({ strokeColor: e.target.value })}
-                      className="flex-1 h-8 text-sm font-mono min-w-0"
-                    />
-                  </div>
-                </div>
+                <ColorPicker
+                  label="Stroke"
+                  color={element.strokeColor}
+                  onChange={(color) => update({ strokeColor: color })}
+                />
 
                 <div className="space-y-2">
                   <Label className="text-xs text-muted-foreground">Style</Label>

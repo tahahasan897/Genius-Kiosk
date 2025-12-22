@@ -9,7 +9,8 @@ import {
   Pencil,
   Triangle,
   Eraser,
-  Upload
+  Upload,
+  Crop
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';

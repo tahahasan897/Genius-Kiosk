@@ -10,19 +10,19 @@
 INSERT INTO admin_users (email, firebase_uid, display_name, is_super_admin)
 VALUES
   ('superadmin@test.com', 'pending-uid-1', 'Super Admin Test', true),
-  ('chainadmin@test.com', 'pending-uid-2', 'Chain Admin Test', false),
-  ('admin2@test.com', 'pending-uid-3', 'Chain Admin 2', false)
+  ('storeadmin@test.com', 'pending-uid-2', 'Store Admin', false),
+  ('storeadmin2@test.com', 'pending-uid-3', 'Store Admin 2', false)
 ON CONFLICT (email) DO UPDATE SET
   display_name = EXCLUDED.display_name,
   is_super_admin = EXCLUDED.is_super_admin;
 
 -- Assign chain admins to chains
 INSERT INTO admin_chain_assignments (user_id, chain_id)
-SELECT user_id, 1 FROM admin_users WHERE email = 'chainadmin@test.com'
+SELECT user_id, 1 FROM admin_users WHERE email = 'storeadmin@test.com'
 ON CONFLICT DO NOTHING;
 
 INSERT INTO admin_chain_assignments (user_id, chain_id)
-SELECT user_id, 2 FROM admin_users WHERE email = 'admin2@test.com'
+SELECT user_id, 2 FROM admin_users WHERE email = 'storeadmin2@test.com'
 ON CONFLICT DO NOTHING;
 
 -- Verify the results

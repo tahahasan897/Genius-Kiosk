@@ -1,6 +1,6 @@
 export type ElementType = 'rectangle' | 'circle' | 'line' | 'arrow' | 'polygon' | 'text' | 'freehand' | 'triangle' | 'trapezoid' | 'parallelogram' | 'smart-pin' | 'static-pin' | 'device-pin' | 'group';
 
-export type Tool = 'select' | 'rectangle' | 'circle' | 'line' | 'arrow' | 'polygon' | 'text' | 'freehand' | 'triangle' | 'trapezoid' | 'parallelogram' | 'smart-pin' | 'static-pin' | 'device-pin' | 'eraser';
+export type Tool = 'select' | 'rectangle' | 'circle' | 'line' | 'arrow' | 'polygon' | 'text' | 'freehand' | 'triangle' | 'trapezoid' | 'parallelogram' | 'smart-pin' | 'static-pin' | 'device-pin' | 'eraser' | 'crop';
 
 export type NameVisibility = 'layers' | 'canvas' | 'both' | 'none';
 
@@ -224,7 +224,7 @@ export const defaultSizes: Record<ElementType, { width: number; height: number }
   triangle: { width: 120, height: 120 },
   trapezoid: { width: 120, height: 80 },
   parallelogram: { width: 120, height: 120 },
-  'smart-pin': { width: 30, height: 40 },
+  'smart-pin': { width: 20, height: 30 },
   'static-pin': { width: 55, height: 55 },
   'device-pin': { width: 50, height: 60 },
   'group': { width: 100, height: 100 },
@@ -254,6 +254,36 @@ export const getStrokeDash = (strokeStyle?: string): number[] => {
     return [];
   }
   return STROKE_DASH_PATTERNS[strokeStyle as StrokeStyle];
+};
+
+// Helper to apply opacity to a color (returns rgba string)
+// Konva shapes don't have strokeOpacity prop, so we apply it via color alpha
+export const applyOpacityToColor = (color: string, opacity: number): string => {
+  // If already rgba, parse and replace alpha
+  if (color.startsWith('rgba')) {
+    return color.replace(/[\d.]+\)$/, `${opacity})`);
+  }
+  // If rgb, convert to rgba
+  if (color.startsWith('rgb(')) {
+    return color.replace('rgb(', 'rgba(').replace(')', `, ${opacity})`);
+  }
+  // If hex color
+  if (color.startsWith('#')) {
+    const hex = color.slice(1);
+    let r: number, g: number, b: number;
+    if (hex.length === 3) {
+      r = parseInt(hex[0] + hex[0], 16);
+      g = parseInt(hex[1] + hex[1], 16);
+      b = parseInt(hex[2] + hex[2], 16);
+    } else {
+      r = parseInt(hex.slice(0, 2), 16);
+      g = parseInt(hex.slice(2, 4), 16);
+      b = parseInt(hex.slice(4, 6), 16);
+    }
+    return `rgba(${r}, ${g}, ${b}, ${opacity})`;
+  }
+  // Fallback: return original color
+  return color;
 };
 
 // Default group element properties
