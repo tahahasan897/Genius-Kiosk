@@ -323,7 +323,7 @@ const StoreManagement = () => {
                 <Button
                   onClick={() => setShowCreateDialog(true)}
                   variant="outline"
-                  className="mt-4 border-gray-600 text-slate-300 hover:bg-gray-800"
+                  className="mt-4 bg-white border-gray-300 text-blue-500 hover:bg-gray-100"
                 >
                   Add First Store
                 </Button>
@@ -540,7 +540,7 @@ const StoreManagement = () => {
               variant="outline"
               onClick={() => setShowCreateDialog(false)}
               disabled={submitting}
-              className="border-gray-600 text-slate-300 hover:bg-gray-800"
+              className="bg-white border-gray-300 text-blue-500 hover:bg-gray-100"
             >
               Cancel
             </Button>
@@ -654,7 +654,7 @@ const StoreManagement = () => {
               variant="outline"
               onClick={() => setShowEditDialog(false)}
               disabled={submitting}
-              className="border-gray-600 text-slate-300 hover:bg-gray-800"
+              className="bg-white border-gray-300 text-blue-500 hover:bg-gray-100"
             >
               Cancel
             </Button>
@@ -691,7 +691,7 @@ const StoreManagement = () => {
               variant="outline"
               onClick={() => setShowDeleteDialog(false)}
               disabled={submitting}
-              className="border-gray-600 text-slate-300 hover:bg-gray-800"
+              className="bg-white border-gray-300 text-blue-500 hover:bg-gray-100"
             >
               Cancel
             </Button>

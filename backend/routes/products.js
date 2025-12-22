@@ -280,4 +280,75 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Get store info by ID (public endpoint for kiosk display)
+router.get('/store/:storeId/info', async (req, res) => {
+  try {
+    const { storeId } = req.params;
+    const result = await query(
+      `SELECT s.store_id, s.store_name, s.city, s.state, c.chain_id, c.chain_name
+       FROM stores s
+       LEFT JOIN chains c ON s.chain_id = c.chain_id
+       WHERE s.store_id = $1 AND s.is_active = true`,
+      [storeId]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Store not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error fetching store info:', error);
+    res.status(500).json({ error: 'Failed to fetch store info' });
+  }
+});
+
+// Get all active stores (public endpoint for landing page)
+router.get('/stores', async (req, res) => {
+  try {
+    const result = await query(
+      `SELECT s.store_id, s.store_name, s.city, s.state, c.chain_name
+       FROM stores s
+       LEFT JOIN chains c ON s.chain_id = c.chain_id
+       WHERE s.is_active = true
+       ORDER BY c.chain_name, s.store_name`
+    );
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error fetching public stores:', error);
+    res.status(500).json({ error: 'Failed to fetch stores' });
+  }
+});
+
+// Get published store map (public endpoint for kiosk display)
+router.get('/store/:storeId/map', async (req, res) => {
+  try {
+    const { storeId } = req.params;
+
+    // Get store info
+    const storeResult = await query('SELECT * FROM stores WHERE store_id = $1 AND is_active = true', [storeId]);
+
+    if (storeResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Store not found' });
+    }
+
+    // Get only published map elements
+    const elementsResult = await query(
+      'SELECT * FROM store_map_elements WHERE store_id = $1 AND is_published = true ORDER BY z_index, id',
+      [storeId]
+    );
+
+    res.json({
+      store: storeResult.rows[0],
+      elements: elementsResult.rows.map(row => ({
+        ...row,
+        metadata: typeof row.metadata === 'string' ? JSON.parse(row.metadata) : (row.metadata || {})
+      }))
+    });
+  } catch (error) {
+    console.error('Error fetching public map:', error);
+    res.status(500).json({ error: 'Failed to fetch map' });
+  }
+});
+
 export default router;

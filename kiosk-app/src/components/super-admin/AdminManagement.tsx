@@ -341,7 +341,7 @@ const AdminManagement = () => {
               <Button
                 onClick={() => setShowInviteDialog(true)}
                 variant="outline"
-                className="mt-4 border-gray-600 text-slate-300 hover:bg-gray-800"
+                className="mt-4 bg-white border-gray-300 text-blue-500 hover:bg-gray-100"
               >
                 Invite your first admin
               </Button>
@@ -591,7 +591,7 @@ const AdminManagement = () => {
               variant="outline"
               onClick={() => setShowInviteDialog(false)}
               disabled={submitting}
-              className="border-gray-600 text-slate-300 hover:bg-gray-800"
+              className="bg-white border-gray-300 text-blue-500 hover:bg-gray-100"
             >
               Cancel
             </Button>
@@ -707,7 +707,7 @@ const AdminManagement = () => {
               variant="outline"
               onClick={() => setShowEditDialog(false)}
               disabled={submitting}
-              className="border-gray-600 text-slate-300 hover:bg-gray-800"
+              className="bg-white border-gray-300 text-blue-500 hover:bg-gray-100"
             >
               Cancel
             </Button>
@@ -744,7 +744,7 @@ const AdminManagement = () => {
               variant="outline"
               onClick={() => setShowDeleteDialog(false)}
               disabled={submitting}
-              className="border-gray-600 text-slate-300 hover:bg-gray-800"
+              className="bg-white border-gray-300 text-blue-500 hover:bg-gray-100"
             >
               Cancel
             </Button>
@@ -782,7 +782,7 @@ const AdminManagement = () => {
               variant="outline"
               onClick={() => setShowCancelInviteDialog(false)}
               disabled={submitting}
-              className="border-gray-600 text-slate-300 hover:bg-gray-800"
+              className="bg-white border-gray-300 text-blue-500 hover:bg-gray-100"
             >
               Keep Invite
             </Button>

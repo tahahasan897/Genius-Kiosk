@@ -6,6 +6,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider, ProtectedRoute, SuperAdminRoute } from "@/contexts/AuthContext";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { StoreProvider } from "@/contexts/StoreContext";
+import Landing from "./pages/Landing";
 import Search from "./pages/Search";
 import ProductResults from "./pages/ProductResults";
 import Admin from "./pages/Admin";
@@ -14,6 +15,7 @@ import SuperAdmin from "./pages/SuperAdmin";
 import SuperAdminLogin from "./pages/SuperAdminLogin";
 import AdminInviteCallback from "./pages/AdminInviteCallback";
 import SetPassword from "./pages/SetPassword";
+import SetPasswordStore from "./pages/SetPasswordStore";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -28,8 +30,14 @@ const App = () => (
           <AuthProvider>
             <StoreProvider>
               <Routes>
-                <Route path="/" element={<Search />} />
-                <Route path="/results" element={<ProductResults />} />
+                {/* Landing page */}
+                <Route path="/" element={<Landing />} />
+
+                {/* Kiosk routes - public facing for each store */}
+                <Route path="/kiosk/:storeId" element={<Search />} />
+                <Route path="/kiosk/:storeId/results" element={<ProductResults />} />
+
+                {/* Auth routes */}
                 <Route path="/login" element={<Login />} />
                 <Route
                   path="/admin"
@@ -41,6 +49,7 @@ const App = () => (
                 />
                 <Route path="/team/login" element={<SuperAdminLogin />} />
                 <Route path="/team/set-password" element={<SetPassword />} />
+                <Route path="/admin/set-password" element={<SetPasswordStore />} />
                 <Route path="/admin-invite-callback" element={<AdminInviteCallback />} />
                 <Route
                   path="/team"

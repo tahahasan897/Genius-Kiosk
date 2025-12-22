@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams, useParams } from 'react-router-dom';
 import { ArrowLeft, Loader2 } from 'lucide-react';
 import SearchBar from '@/components/SearchBar';
 import StoreMap from '@/components/StoreMap';
@@ -10,21 +10,22 @@ import { Product } from '@/data/products';
 import { toast } from 'sonner';
 
 const ProductResults = () => {
-  const [loading, setLoading] = useState(false); 
+  const [loading, setLoading] = useState(false);
   const [searchParams] = useSearchParams();
+  const { storeId } = useParams<{ storeId: string }>();
   const navigate = useNavigate();
   const query = searchParams.get('q') || '';
-  
+
   const [results, setResults] = useState<Product[]>([]);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
 
   useEffect(() => {
     const fetchProducts = async () => {
-      if (!query) return;
+      if (!query || !storeId) return;
 
       setLoading(true);
       try {
-        const searchResults = await searchProducts(query);  // Async now!
+        const searchResults = await searchProducts(query, storeId);
         setResults(searchResults);
 
         if (searchResults.length > 0) {
@@ -42,10 +43,10 @@ const ProductResults = () => {
     };
 
     fetchProducts();
-  }, [query]);
+  }, [query, storeId]);
 
   const handleNewSearch = (newQuery: string) => {
-    navigate(`/results?q=${encodeURIComponent(newQuery)}`);
+    navigate(`/kiosk/${storeId}/results?q=${encodeURIComponent(newQuery)}`);
   };
 
   // Show loading spinner while searching
@@ -114,7 +115,7 @@ const ProductResults = () => {
           <Button
             variant="ghost"
             size="lg"
-            onClick={() => navigate('/')}
+            onClick={() => navigate(`/kiosk/${storeId}`)}
             className="mb-4 text-lg h-12"
           >
             <ArrowLeft className="mr-2 h-6 w-6" />
@@ -144,7 +145,7 @@ const ProductResults = () => {
       <div className="flex-1 container mx-auto p-8">
         <div className="grid grid-cols-1 lg:grid-cols-[60%_40%] gap-8 h-[calc(100vh-16rem)]">
           {/* Left: Store Map */}
-          <StoreMap selectedProduct={selectedProduct} />
+          <StoreMap storeId={storeId ? parseInt(storeId) : 1} selectedProduct={selectedProduct} />
           
           {/* Right: Product Details */}
           {selectedProduct && <ProductDetails product={selectedProduct} />}

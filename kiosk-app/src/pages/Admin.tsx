@@ -4,6 +4,7 @@ import { Upload, Plus, Edit, Trash2, FileSpreadsheet, CheckCircle2, AlertCircle,
 // Auth is handled by SettingsMenu
 import { useStore } from '@/contexts/StoreContext';
 import SettingsMenu from '@/components/admin/SettingsMenu';
+import StoreSelector from '@/components/admin/StoreSelector';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -362,6 +363,7 @@ BREAD001,White Bread,Soft white sandwich bread,Bakery,2.99,3,C,25,t,https://imag
                 <p className="text-muted-foreground">Manage products and inventory</p>
               </div>
             <div className="flex items-center gap-4">
+              <StoreSelector hideIfSingleStore={true} showChainSelector={true} />
               <SettingsMenu />
             </div>
           </div>

@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { getStores, getChains, type Store, type Chain } from '@/api/stores';
+import { useAuth } from '@/contexts/AuthContext';
 
 interface StoreContextType {
   // Current selection
@@ -42,6 +43,7 @@ const STORAGE_KEY_CHAIN = 'selectedChainId';
 const STORAGE_KEY_STORE = 'selectedStoreId';
 
 export const StoreProvider = ({ children }: StoreProviderProps) => {
+  const { user, loading: authLoading } = useAuth();
   const [chains, setChains] = useState<Chain[]>([]);
   const [stores, setStores] = useState<Store[]>([]);
   const [currentChainId, setCurrentChainIdState] = useState<number | null>(null);
@@ -89,8 +91,18 @@ export const StoreProvider = ({ children }: StoreProviderProps) => {
   };
 
   useEffect(() => {
-    fetchData();
-  }, []);
+    // Only fetch when auth is ready and user is logged in
+    if (!authLoading && user) {
+      fetchData();
+    } else if (!authLoading && !user) {
+      // Clear data when user logs out
+      setChains([]);
+      setStores([]);
+      setCurrentChainIdState(null);
+      setCurrentStoreIdState(null);
+      setLoading(false);
+    }
+  }, [user, authLoading]);
 
   const setCurrentChainId = (chainId: number) => {
     setCurrentChainIdState(chainId);

@@ -56,7 +56,7 @@ const SuperAdminDashboard = ({ onNavigateToTab }: SuperAdminDashboardProps) => {
       <div className="flex items-center justify-center py-24">
         <div className="text-center space-y-4">
           <p className="text-red-400">Failed to load dashboard data</p>
-          <Button onClick={fetchStats} variant="outline" className="border-gray-600 text-slate-300 hover:bg-gray-800">
+          <Button onClick={fetchStats} variant="outline" className="bg-white border-gray-300 text-blue-500 hover:bg-gray-100">
             Try again
           </Button>
         </div>
@@ -207,7 +207,7 @@ const SuperAdminDashboard = ({ onNavigateToTab }: SuperAdminDashboardProps) => {
                   <Button
                     variant="outline"
                     size="sm"
-                    className="mt-3 border-gray-600 text-slate-300 hover:bg-gray-800"
+                    className="mt-3 bg-white border-gray-300 text-blue-500 hover:bg-gray-100"
                     onClick={() => onNavigateToTab('chains')}
                   >
                     Add First Chain
@@ -249,7 +249,7 @@ const SuperAdminDashboard = ({ onNavigateToTab }: SuperAdminDashboardProps) => {
                 <Button
                   variant="outline"
                   size="sm"
-                  className="mt-3 border-gray-600 text-slate-300 hover:bg-gray-800"
+                  className="mt-3 bg-white border-gray-300 text-blue-500 hover:bg-gray-100"
                   onClick={() => onNavigateToTab('stores')}
                 >
                   Add First Store

@@ -23,6 +23,7 @@ const AdminInviteCallback = () => {
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [passwordSetupPath, setPasswordSetupPath] = useState('/team/set-password');
   const hasAttemptedSignIn = useRef(false);
 
   useEffect(() => {
@@ -128,10 +129,16 @@ const AdminInviteCallback = () => {
         // Set flag indicating user needs to set a password
         window.localStorage.setItem('needsPasswordSetup', 'true');
 
+        // Determine redirect based on role
+        // Store admins go to /admin/set-password, team/super admins go to /team/set-password
+        const isStoreAdmin = role.role === 'store_admin';
+        const targetPath = isStoreAdmin ? '/admin/set-password' : '/team/set-password';
+        setPasswordSetupPath(targetPath);
+
         // Navigate to set password page after a brief moment for UI feedback
         setTimeout(() => {
-          console.log('Navigating to /team/set-password...');
-          navigate('/team/set-password', { replace: true });
+          console.log(`Navigating to ${targetPath}...`);
+          navigate(targetPath, { replace: true });
         }, 1500);
       } else {
         console.log('No admin role found for this user');
@@ -267,7 +274,7 @@ const AdminInviteCallback = () => {
                 <span className="text-slate-400">Setting up your password...</span>
               </div>
               <Button
-                onClick={() => navigate('/team/set-password', { replace: true })}
+                onClick={() => navigate(passwordSetupPath, { replace: true })}
                 variant="ghost"
                 className="text-blue-500 hover:text-blue-400 hover:bg-gray-800"
               >

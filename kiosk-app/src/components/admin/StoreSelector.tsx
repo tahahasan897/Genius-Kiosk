@@ -10,10 +10,11 @@ import { Store, ChevronDown } from 'lucide-react';
 
 interface StoreSelectorProps {
   showChainSelector?: boolean;
+  hideIfSingleStore?: boolean;
   className?: string;
 }
 
-const StoreSelector = ({ showChainSelector = false, className = '' }: StoreSelectorProps) => {
+const StoreSelector = ({ showChainSelector = false, hideIfSingleStore = false, className = '' }: StoreSelectorProps) => {
   const {
     chains,
     stores,
@@ -46,6 +47,17 @@ const StoreSelector = ({ showChainSelector = false, className = '' }: StoreSelec
       <div className={`flex items-center gap-2 text-sm text-muted-foreground ${className}`}>
         <Store className="h-4 w-4" />
         <span>No stores available</span>
+      </div>
+    );
+  }
+
+  // Hide if only one store and hideIfSingleStore is true
+  if (hideIfSingleStore && availableStores.length <= 1) {
+    // Just show current store name without selector
+    return (
+      <div className={`flex items-center gap-2 text-sm ${className}`}>
+        <Store className="h-4 w-4 text-muted-foreground" />
+        <span className="font-medium">{currentStore?.store_name || 'No store'}</span>
       </div>
     );
   }

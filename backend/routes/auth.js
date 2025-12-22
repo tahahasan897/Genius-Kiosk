@@ -59,17 +59,28 @@ const generatePasscode = () => {
   return crypto.randomInt(100000, 999999).toString();
 };
 
+// Check if we're in development mode (no real email configured)
+const isDevelopmentMode = !process.env.SMTP_HOST && !process.env.EMAIL_SERVICE;
+
+if (isDevelopmentMode) {
+  console.log('📧 Auth: Running in DEVELOPMENT MODE - verification codes will be logged to console');
+} else {
+  console.log('📧 Auth: Email configured via', process.env.SMTP_HOST ? 'SMTP' : 'EMAIL_SERVICE');
+}
+
 // Send verification code
 router.post('/send-verification-code', async (req, res) => {
   try {
     const { email } = req.body;
-    
+    console.log(`📨 Verification code requested for: ${email}`);
+
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ error: 'Valid email is required' });
     }
-    
+
     // Generate passcode
     const passcode = generatePasscode();
+    console.log(`🔑 Generated passcode for ${email}`);
     const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
     
     // Store passcode
@@ -99,10 +110,22 @@ router.post('/send-verification-code', async (req, res) => {
     };
     
     try {
-      await transporter.sendMail(mailOptions);
-      
-      res.json({ 
-        success: true, 
+      const result = await transporter.sendMail(mailOptions);
+
+      // Always log the verification code in development mode
+      if (isDevelopmentMode) {
+        console.log('');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('📧 VERIFICATION CODE (Development Mode)');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log(`   Email: ${email}`);
+        console.log(`   Code:  ${passcode}`);
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('');
+      }
+
+      res.json({
+        success: true,
         message: 'Verification code sent to your email',
       });
     } catch (emailError) {

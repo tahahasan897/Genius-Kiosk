@@ -226,7 +226,7 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
       setError(null);
       
       try {
-        const response = await fetch(`${API_URL}/api/admin/stores/${storeId}/map?published=true`);
+        const response = await fetch(`${API_URL}/api/products/store/${storeId}/map`);
         if (!response.ok) {
           throw new Error('Failed to load map');
         }
