@@ -173,8 +173,8 @@ export const defaultSmartPin: Partial<MapElement> = {
   ...defaultElement,
   fillColor: '#ef4444', // Red for smart pins
   fillOpacity: 1,
-  strokeColor: '#b91c1c',
-  strokeWidth: 2,
+  strokeColor: '#ef4444', // Same as fill color (no visible stroke)
+  strokeWidth: 0, // No stroke
   animationStyle: 0, // Default to "Set animation" (no animation until user selects one)
   motionScale: 1, // Default animation speed
   showNameOn: 'layers',
@@ -184,8 +184,8 @@ export const defaultStaticPin: Partial<MapElement> = {
   ...defaultElement,
   fillColor: '#22c55e', // Green for static pins
   fillOpacity: 1,
-  strokeColor: '#15803d',
-  strokeWidth: 2,
+  strokeColor: '#22c55e', // Same as fill color (no visible stroke)
+  strokeWidth: 0, // No stroke
   animationStyle: 0, // Default to "Set animation" (no animation until user selects one)
   motionScale: 1, // Default animation speed
   showNameOn: 'canvas',
@@ -200,8 +200,8 @@ export const defaultDevicePin: Partial<MapElement> = {
   ...defaultElement,
   fillColor: '#6366f1', // Indigo/purple for device pins
   fillOpacity: 1,
-  strokeColor: '#4338ca',
-  strokeWidth: 2,
+  strokeColor: '#6366f1', // Same as fill color (no visible stroke)
+  strokeWidth: 0, // No stroke
   animationStyle: 0, // Default to "Set animation" (no animation until user selects one)
   motionScale: 1, // Default animation speed
   showNameOn: 'canvas',

@@ -13,6 +13,7 @@ interface ColorPickerProps {
   showOpacity?: boolean;
   opacity?: number;
   onOpacityChange?: (opacity: number) => void;
+  onEyedropperRequest?: () => void; // Callback when eyedropper is clicked
 }
 
 // Professional color palette - organized by hue
@@ -75,6 +76,7 @@ const ColorPicker = ({
   showOpacity = false,
   opacity = 1,
   onOpacityChange,
+  onEyedropperRequest,
 }: ColorPickerProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const [inputValue, setInputValue] = useState(color);
@@ -230,6 +232,21 @@ const ColorPicker = ({
                 className="flex-1 h-10 text-sm font-mono uppercase"
                 placeholder="#000000"
               />
+              {/* Eyedropper button */}
+              {onEyedropperRequest && (
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="h-10 w-10 flex-shrink-0"
+                  onClick={() => {
+                    setIsOpen(false); // Close the popover
+                    onEyedropperRequest();
+                  }}
+                  title="Pick color from canvas"
+                >
+                  <Pipette className="h-4 w-4" />
+                </Button>
+              )}
               {/* Save button - only show if current color is custom and not already saved */}
               {isCustomColor(pickerColor) && !customColors.some(c => c.toLowerCase() === pickerColor.toLowerCase()) && (
                 <Button

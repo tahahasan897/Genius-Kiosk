@@ -35,6 +35,8 @@ interface PropertiesPanelProps {
   // Flip handlers
   onFlipHorizontal?: (id: string) => void;
   onFlipVertical?: (id: string) => void;
+  // Eyedropper
+  onActivateEyedropper?: (elementId: string, property: 'fillColor' | 'strokeColor' | 'pinLabelColor' | 'labelColor') => void;
   // Eraser props
   activeTool?: Tool;
   eraserSize?: number;
@@ -86,6 +88,7 @@ const PropertiesPanel = ({
   onUpdateElement,
   onFlipHorizontal,
   onFlipVertical,
+  onActivateEyedropper,
   activeTool,
   eraserSize = 20,
   onEraserSizeChange,
@@ -476,6 +479,7 @@ const PropertiesPanel = ({
                       label="Label Color"
                       color={element.pinLabelColor || '#ffffff'}
                       onChange={(color) => update({ pinLabelColor: color })}
+                      onEyedropperRequest={onActivateEyedropper ? () => onActivateEyedropper(element.id, 'pinLabelColor') : undefined}
                     />
                   </>
                 )}
@@ -524,6 +528,7 @@ const PropertiesPanel = ({
                   label="Pin Color"
                   color={element.fillColor || '#6366f1'}
                   onChange={(color) => update({ fillColor: color })}
+                  onEyedropperRequest={onActivateEyedropper ? () => onActivateEyedropper(element.id, 'fillColor') : undefined}
                 />
 
                 {isSmartPin && (
@@ -603,6 +608,7 @@ const PropertiesPanel = ({
                   label="Label Color"
                   color={element.labelColor || '#000000'}
                   onChange={(color) => update({ labelColor: color })}
+                  onEyedropperRequest={onActivateEyedropper ? () => onActivateEyedropper(element.id, 'labelColor') : undefined}
                 />
               </div>
 
@@ -691,6 +697,7 @@ const PropertiesPanel = ({
                 label="Text Color"
                 color={element.fillColor}
                 onChange={(color) => update({ fillColor: color })}
+                onEyedropperRequest={onActivateEyedropper ? () => onActivateEyedropper(element.id, 'fillColor') : undefined}
               />
 
               {/* Typography Section */}
@@ -1234,6 +1241,7 @@ const PropertiesPanel = ({
                     label="Color"
                     color={element.fillColor}
                     onChange={(color) => update({ fillColor: color })}
+                    onEyedropperRequest={onActivateEyedropper ? () => onActivateEyedropper(element.id, 'fillColor') : undefined}
                   />
                 )}
 
@@ -1262,6 +1270,7 @@ const PropertiesPanel = ({
                   label="Stroke"
                   color={element.strokeColor}
                   onChange={(color) => update({ strokeColor: color })}
+                  onEyedropperRequest={onActivateEyedropper ? () => onActivateEyedropper(element.id, 'strokeColor') : undefined}
                 />
 
                 <div className="space-y-2">

@@ -126,6 +126,7 @@ const Dashboard = ({ onNavigateToTab, storeId = 1, chainId = 1 }: DashboardProps
           notifications={stats.notifications}
           onNavigateToTab={onNavigateToTab}
           onRefresh={fetchStats}
+          chainId={chainId}
         />
       </div>
 

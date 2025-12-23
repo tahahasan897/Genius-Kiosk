@@ -195,9 +195,9 @@ router.get('/dashboard', requireAdmin, async (req, res) => {
       });
     }
 
-    // Unlinked products notification (if there are products but few linked)
+    // Unlinked products notification
     const unlinkedProducts = totalProducts - linkedProducts;
-    if (totalProducts > 0 && unlinkedProducts > 0 && linkedProducts < totalProducts * 0.5) {
+    if (totalProducts > 0 && unlinkedProducts > 0) {
       notifications.push({
         id: 'unlinked-products',
         type: 'info',
@@ -1961,6 +1961,146 @@ router.put('/stores/:storeId/pins/:pinId/link', requireAdmin, async (req, res) =
     res.status(500).json({ error: 'Failed to sync product links', details: error.message });
   } finally {
     client.release();
+  }
+});
+
+// ============================================
+// NOTIFICATION HISTORY ENDPOINTS
+// ============================================
+
+// Get notification history with pagination
+router.get('/notifications', requireAdmin, async (req, res) => {
+  try {
+    const { chainId, page = 1, limit = 10 } = req.query;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    if (!chainId) {
+      return res.status(400).json({ error: 'chainId is required' });
+    }
+
+    // Get total count
+    const countResult = await query(
+      'SELECT COUNT(*) FROM notification_history WHERE chain_id = $1',
+      [chainId]
+    );
+    const total = parseInt(countResult.rows[0].count);
+
+    // Get paginated notifications
+    const result = await query(
+      `SELECT id, notification_id, type, title, message, action, is_resolved, resolved_at, created_at
+       FROM notification_history
+       WHERE chain_id = $1
+       ORDER BY created_at DESC
+       LIMIT $2 OFFSET $3`,
+      [chainId, parseInt(limit), offset]
+    );
+
+    res.json({
+      notifications: result.rows,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        totalPages: Math.ceil(total / parseInt(limit)),
+        hasNext: offset + result.rows.length < total,
+        hasPrev: parseInt(page) > 1
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching notification history:', error);
+    res.status(500).json({ error: 'Failed to fetch notification history', details: error.message });
+  }
+});
+
+// Log a new notification (called when notifications are generated)
+router.post('/notifications', requireAdmin, async (req, res) => {
+  try {
+    const { chainId, notifications } = req.body;
+
+    if (!chainId || !notifications || !Array.isArray(notifications)) {
+      return res.status(400).json({ error: 'chainId and notifications array are required' });
+    }
+
+    // Insert notifications that don't already exist (by notification_id)
+    for (const notification of notifications) {
+      // Check if this exact notification already exists and is unresolved
+      const existing = await query(
+        `SELECT id FROM notification_history
+         WHERE chain_id = $1 AND notification_id = $2 AND is_resolved = FALSE`,
+        [chainId, notification.id]
+      );
+
+      if (existing.rows.length === 0) {
+        await query(
+          `INSERT INTO notification_history (chain_id, notification_id, type, title, message, action)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [chainId, notification.id, notification.type, notification.title, notification.message, notification.action]
+        );
+      }
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error logging notifications:', error);
+    res.status(500).json({ error: 'Failed to log notifications', details: error.message });
+  }
+});
+
+// Mark notification as resolved
+router.patch('/notifications/:id/resolve', requireAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await query(
+      `UPDATE notification_history
+       SET is_resolved = TRUE, resolved_at = CURRENT_TIMESTAMP
+       WHERE id = $1
+       RETURNING *`,
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Notification not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (error) {
+    console.error('Error resolving notification:', error);
+    res.status(500).json({ error: 'Failed to resolve notification', details: error.message });
+  }
+});
+
+// Auto-resolve notifications that are no longer applicable
+router.post('/notifications/auto-resolve', requireAdmin, async (req, res) => {
+  try {
+    const { chainId, activeNotificationIds } = req.body;
+
+    if (!chainId || !activeNotificationIds || !Array.isArray(activeNotificationIds)) {
+      return res.status(400).json({ error: 'chainId and activeNotificationIds array are required' });
+    }
+
+    // Resolve notifications that are no longer in the active list
+    if (activeNotificationIds.length > 0) {
+      await query(
+        `UPDATE notification_history
+         SET is_resolved = TRUE, resolved_at = CURRENT_TIMESTAMP
+         WHERE chain_id = $1 AND is_resolved = FALSE AND notification_id NOT IN (${activeNotificationIds.map((_, i) => `$${i + 2}`).join(', ')})`,
+        [chainId, ...activeNotificationIds]
+      );
+    } else {
+      // If no active notifications, resolve all unresolved
+      await query(
+        `UPDATE notification_history
+         SET is_resolved = TRUE, resolved_at = CURRENT_TIMESTAMP
+         WHERE chain_id = $1 AND is_resolved = FALSE`,
+        [chainId]
+      );
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error auto-resolving notifications:', error);
+    res.status(500).json({ error: 'Failed to auto-resolve notifications', details: error.message });
   }
 });
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Stage, Layer, Image as KonvaImage, Rect, Circle, Line, RegularPolygon, Group, Text as KonvaText } from 'react-konva';
+import { Stage, Layer, Image as KonvaImage, Rect, Circle, Line, Arrow, RegularPolygon, Group, Text as KonvaText } from 'react-konva';
 import Konva from 'konva';
 import useImage from 'use-image';
 import { X, Search, MapPin, Loader2, ZoomIn, ZoomOut, Maximize } from 'lucide-react';
@@ -581,11 +581,12 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl, uploade
         );
       case 'arrow':
         return (
-          <Line
+          <Arrow
             key={element.id}
             points={element.points || [0, 0, 100, 0]}
             stroke={element.strokeColor}
             strokeWidth={element.strokeWidth}
+            fill={element.strokeColor}
             dash={getStrokeDash(element.strokeStyle)}
           />
         );
@@ -611,6 +612,7 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl, uploade
             fill={element.fillColor}
             align={element.textAlign}
             width={element.width}
+            padding={10}
             letterSpacing={element.letterSpacing || 0}
             lineHeight={element.lineHeight || 1}
             textDecoration={element.textDecoration || 'none'}
@@ -657,8 +659,6 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl, uploade
               height={staticPinHeight}
               fill={element.fillColor}
               opacity={element.fillOpacity}
-              stroke={element.strokeColor}
-              strokeWidth={element.strokeWidth}
               cornerRadius={staticCornerRadius}
             />
             {/* Triangular pointer at bottom */}
@@ -671,19 +671,7 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl, uploade
               closed={true}
               fill={element.fillColor}
               opacity={element.fillOpacity}
-              stroke={element.strokeColor}
-              strokeWidth={element.strokeWidth}
               lineJoin="round"
-            />
-            {/* Cover the stroke line between rectangle and pointer */}
-            <Line
-              points={[
-                -staticPinWidth * 0.18, -staticPointerHeight,
-                staticPinWidth * 0.18, -staticPointerHeight,
-              ]}
-              stroke={element.fillColor}
-              strokeWidth={(element.strokeWidth || 2) + 2}
-              opacity={element.fillOpacity}
             />
             {/* Pin label inside rectangle */}
             {element.pinLabel && (
@@ -796,9 +784,8 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl, uploade
     const innerCircleRadius = pinRadius * 0.45;
     const innerCircleY = -pinRadius - pinRadius * 0.2;
 
-    // Use element's colors instead of hardcoded red
+    // Use element's color
     const pinFillColor = element.fillColor || '#ef4444';
-    const pinStrokeColor = element.strokeColor || '#dc2626';
 
     // Floating label dimensions - scale with pin size (1.5x the pin)
     const labelScale = 1.5;
@@ -866,8 +853,6 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl, uploade
             y={innerCircleY}
             radius={pinRadius}
             fill={pinFillColor}
-            stroke={pinStrokeColor}
-            strokeWidth={element.strokeWidth || 2}
           />
 
           {/* Bottom triangle point of the teardrop */}
@@ -879,19 +864,7 @@ const PreviewModal = ({ isOpen, onClose, storeId, elements, mapImageUrl, uploade
             ]}
             closed={true}
             fill={pinFillColor}
-            stroke={pinStrokeColor}
-            strokeWidth={element.strokeWidth || 2}
             lineJoin="round"
-          />
-
-          {/* Cover the stroke line between circle and triangle */}
-          <Line
-            points={[
-              -pinRadius * 0.65, innerCircleY + pinRadius * 0.5,
-              pinRadius * 0.65, innerCircleY + pinRadius * 0.5,
-            ]}
-            stroke={pinFillColor}
-            strokeWidth={4}
           />
 
           {/* Inner white circle (hollow center) */}

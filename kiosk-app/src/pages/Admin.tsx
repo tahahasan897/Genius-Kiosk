@@ -52,7 +52,7 @@ import Dashboard from '@/components/admin/Dashboard';
 const Admin = () => {
   const navigate = useNavigate();
   // Auth is now handled by SettingsMenu component
-  const { currentStoreId, currentChainId } = useStore();
+  const { currentStoreId, currentChainId, loading: storeLoading } = useStore();
   const [activeTab, setActiveTab] = useState('dashboard');
   const [products, setProducts] = useState<AdminProduct[]>([]);
   const [loading, setLoading] = useState(false);
@@ -385,7 +385,16 @@ BREAD001,White Bread,Soft white sandwich bread,Bakery,2.99,3,C,25,t,https://imag
           </div>
 
           <TabsContent value="dashboard" className="space-y-6">
-            <Dashboard onNavigateToTab={handleNavigateToTab} storeId={currentStoreId || 1} chainId={currentChainId || 1} />
+            {storeLoading ? (
+              <div className="flex items-center justify-center py-24">
+                <div className="text-center space-y-4">
+                  <div className="h-8 w-8 animate-spin mx-auto border-4 border-primary border-t-transparent rounded-full" />
+                  <p className="text-muted-foreground">Loading store data...</p>
+                </div>
+              </div>
+            ) : (
+              <Dashboard onNavigateToTab={handleNavigateToTab} storeId={currentStoreId || 1} chainId={currentChainId || 1} />
+            )}
           </TabsContent>
 
           <TabsContent value="products" className="space-y-6">

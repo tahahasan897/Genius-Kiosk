@@ -147,3 +147,76 @@ export const getDashboardStats = async (storeId: number = 1): Promise<DashboardS
     });
     return response.data;
 };
+
+// ============================================
+// NOTIFICATION HISTORY
+// ============================================
+
+export interface NotificationHistoryItem {
+    id: number;
+    notification_id: string;
+    type: 'info' | 'warning' | 'error' | 'success';
+    title: string;
+    message?: string;
+    action?: string;
+    is_resolved: boolean;
+    resolved_at?: string;
+    created_at: string;
+}
+
+export interface NotificationHistoryResponse {
+    notifications: NotificationHistoryItem[];
+    pagination: {
+        page: number;
+        limit: number;
+        total: number;
+        totalPages: number;
+        hasNext: boolean;
+        hasPrev: boolean;
+    };
+}
+
+// Get notification history with pagination
+export const getNotificationHistory = async (
+    chainId: number,
+    page: number = 1,
+    limit: number = 10
+): Promise<NotificationHistoryResponse> => {
+    const headers = getAuthHeaders();
+    const response = await axios.get(`${API_URL}/api/admin/notifications`, {
+        headers,
+        params: { chainId, page, limit }
+    });
+    return response.data;
+};
+
+// Log notifications to history
+export const logNotifications = async (
+    chainId: number,
+    notifications: Notification[]
+): Promise<void> => {
+    const headers = getAuthHeaders();
+    await axios.post(`${API_URL}/api/admin/notifications`, {
+        chainId,
+        notifications
+    }, { headers });
+};
+
+// Mark notification as resolved
+export const resolveNotification = async (notificationId: number): Promise<NotificationHistoryItem> => {
+    const headers = getAuthHeaders();
+    const response = await axios.patch(`${API_URL}/api/admin/notifications/${notificationId}/resolve`, {}, { headers });
+    return response.data;
+};
+
+// Auto-resolve notifications that are no longer applicable
+export const autoResolveNotifications = async (
+    chainId: number,
+    activeNotificationIds: string[]
+): Promise<void> => {
+    const headers = getAuthHeaders();
+    await axios.post(`${API_URL}/api/admin/notifications/auto-resolve`, {
+        chainId,
+        activeNotificationIds
+    }, { headers });
+};

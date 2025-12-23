@@ -145,7 +145,6 @@ const SuperAdminLogin = () => {
                   <Input
                     id="reset-email"
                     type="email"
-                    placeholder="you@example.com"
                     value={resetEmail}
                     onChange={(e) => setResetEmail(e.target.value)}
                     className="pl-10 bg-gray-800 border-gray-600 text-slate-100 placeholder:text-slate-500"
@@ -197,7 +196,6 @@ const SuperAdminLogin = () => {
                     <Input
                       id="email"
                       type="email"
-                      placeholder="you@example.com"
                       value={email}
                       onChange={(e) => {
                         setEmail(e.target.value);
@@ -219,7 +217,6 @@ const SuperAdminLogin = () => {
                     <Input
                       id="password"
                       type="password"
-                      placeholder="Enter your password"
                       value={password}
                       onChange={(e) => {
                         setPassword(e.target.value);

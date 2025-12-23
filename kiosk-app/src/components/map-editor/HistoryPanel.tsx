@@ -1,10 +1,10 @@
-import { Clock, Square, Circle, Triangle, Hexagon, Minus, ArrowRight } from 'lucide-react';
+import { Clock, Square, Circle, Triangle, Hexagon, Minus, ArrowRight, MapPin, Type, Monitor } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import type { ElementType, StrokeStyle, Gradient } from './types';
 
-// History entry - stores all shape properties for quick reuse
+// History entry - stores all element properties for quick reuse
 export interface ElementHistoryEntry {
   id: string;
   type: ElementType;
@@ -26,6 +26,20 @@ export interface ElementHistoryEntry {
   sides?: number;
   // Gradient
   gradient?: Gradient;
+  // Pin-specific properties
+  animationStyle?: number;
+  motionScale?: number;
+  pinLabel?: string;
+  pinLabelFontSize?: number;
+  pinLabelColor?: string;
+  pinLabelFontWeight?: 'normal' | 'bold';
+  pinLabelFontFamily?: string;
+  // Text-specific properties
+  text?: string;
+  fontSize?: number;
+  fontFamily?: string;
+  fontWeight?: 'normal' | 'bold';
+  textAlign?: 'left' | 'center' | 'right';
   // Timestamp
   timestamp: number;
 }
@@ -59,6 +73,10 @@ const getElementIcon = (type: ElementType) => {
     case 'parallelogram': return ParallelogramIcon;
     case 'line': return Minus;
     case 'arrow': return ArrowRight;
+    case 'smart-pin': return MapPin;
+    case 'static-pin': return MapPin;
+    case 'device-pin': return Monitor;
+    case 'text': return Type;
     default: return Square;
   }
 };
@@ -73,6 +91,10 @@ const getElementLabel = (type: ElementType) => {
     case 'parallelogram': return 'Parallelogram';
     case 'line': return 'Line';
     case 'arrow': return 'Arrow';
+    case 'smart-pin': return 'Smart Pin';
+    case 'static-pin': return 'Static Pin';
+    case 'device-pin': return 'Device Pin';
+    case 'text': return 'Text';
     default: return type;
   }
 };
@@ -82,11 +104,6 @@ const HistoryPanel = ({
   onPlaceElement,
   onClearHistory,
 }: HistoryPanelProps) => {
-  // Filter to only show shape types (not pins, text, etc.)
-  const shapeHistory = history.filter(entry =>
-    ['rectangle', 'circle', 'triangle', 'polygon', 'trapezoid', 'parallelogram', 'line', 'arrow'].includes(entry.type)
-  );
-
   return (
     <div className="h-full bg-card border-l border-border flex flex-col overflow-hidden">
       <div className="px-4 py-3 border-b border-border flex-shrink-0 flex items-center justify-between">
@@ -94,7 +111,7 @@ const HistoryPanel = ({
           <Clock className="h-4 w-4 text-muted-foreground" />
           <h3 className="font-semibold text-sm">Recent Elements</h3>
         </div>
-        {shapeHistory.length > 0 && onClearHistory && (
+        {history.length > 0 && onClearHistory && (
           <Button
             variant="ghost"
             size="sm"
@@ -108,7 +125,7 @@ const HistoryPanel = ({
 
       <ScrollArea className="flex-1">
         <div className="p-3 space-y-2">
-          {shapeHistory.length === 0 ? (
+          {history.length === 0 ? (
             <div className="text-center py-8 px-4">
               <Clock className="h-10 w-10 mx-auto mb-3 text-muted-foreground/50" />
               <p className="text-sm text-muted-foreground">
@@ -123,7 +140,7 @@ const HistoryPanel = ({
               <p className="text-[10px] text-muted-foreground uppercase tracking-wider px-1 mb-2">
                 Click to place again
               </p>
-              {shapeHistory.map((entry) => {
+              {history.map((entry) => {
                 const Icon = getElementIcon(entry.type);
                 const hasStroke = entry.strokeWidth > 0 && entry.strokeOpacity > 0;
                 const hasRotation = entry.rotation !== 0;
@@ -206,10 +223,10 @@ const HistoryPanel = ({
         </div>
       </ScrollArea>
 
-      {shapeHistory.length > 0 && (
+      {history.length > 0 && (
         <div className="p-3 border-t border-border">
           <p className="text-[10px] text-muted-foreground text-center">
-            Showing last {shapeHistory.length} element{shapeHistory.length !== 1 ? 's' : ''}
+            Showing last {history.length} element{history.length !== 1 ? 's' : ''}
           </p>
         </div>
       )}

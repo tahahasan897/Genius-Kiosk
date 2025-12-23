@@ -294,7 +294,6 @@ const Login = () => {
                       <Input
                         id="reset-email"
                         type="email"
-                        placeholder="you@example.com"
                         value={resetEmail}
                         onChange={(e) => setResetEmail(e.target.value)}
                         className="pl-10"
@@ -345,7 +344,6 @@ const Login = () => {
                       <Input
                         id="email-signin"
                         type="email"
-                        placeholder="you@example.com"
                         value={email}
                         onChange={(e) => {
                           setEmail(e.target.value);
@@ -368,7 +366,6 @@ const Login = () => {
                       <Input
                         id="password-signin"
                         type="password"
-                        placeholder="Enter your password"
                         value={password}
                         onChange={(e) => {
                           setPassword(e.target.value);
@@ -442,7 +439,6 @@ const Login = () => {
                       id="passcode-signin"
                       type="text"
                       inputMode="numeric"
-                      placeholder="000000"
                       value={passcode}
                       onChange={(e) => {
                         const value = e.target.value.replace(/\D/g, '').slice(0, 6);
@@ -512,7 +508,6 @@ const Login = () => {
                       <Input
                         id="email-signup"
                         type="email"
-                        placeholder="you@example.com"
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
                         className="pl-10"
@@ -528,7 +523,6 @@ const Login = () => {
                       <Input
                         id="password-signup"
                         type="password"
-                        placeholder="At least 6 characters"
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         className="pl-10"
@@ -544,7 +538,6 @@ const Login = () => {
                       <Input
                         id="confirm-password"
                         type="password"
-                        placeholder="Confirm your password"
                         value={confirmPassword}
                         onChange={(e) => setConfirmPassword(e.target.value)}
                         className="pl-10"
@@ -592,7 +585,6 @@ const Login = () => {
                       id="passcode"
                       type="text"
                       inputMode="numeric"
-                      placeholder="000000"
                       value={passcode}
                       onChange={(e) => {
                         const value = e.target.value.replace(/\D/g, '').slice(0, 6);

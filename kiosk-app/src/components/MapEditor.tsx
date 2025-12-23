@@ -168,6 +168,14 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     // Contextual toolbar position
     const [toolbarPosition, setToolbarPosition] = useState<{ x: number; y: number } | null>(null);
 
+    // Eyedropper state
+    const [eyedropperActive, setEyedropperActive] = useState(false);
+    const [eyedropperTarget, setEyedropperTarget] = useState<{
+        elementId: string;
+        property: 'fillColor' | 'strokeColor' | 'pinLabelColor' | 'labelColor';
+    } | null>(null);
+    const [eyedropperPreviewColor, setEyedropperPreviewColor] = useState<string | null>(null);
+
     // Animation preview state - tracks which pin to animate and trigger count
     const [animationPreview, setAnimationPreview] = useState<{ pinId: string; style: number; trigger: number } | null>(null);
 
@@ -1557,8 +1565,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
 
     // Element history management functions
     const addToElementHistory = useCallback((element: MapElement) => {
-        // Only track shape types (not pins, text, freehand)
-        const trackableTypes: ElementType[] = ['rectangle', 'circle', 'triangle', 'polygon', 'trapezoid', 'parallelogram', 'line', 'arrow'];
+        // Track all element types except freehand and groups
+        const trackableTypes: ElementType[] = ['rectangle', 'circle', 'triangle', 'polygon', 'trapezoid', 'parallelogram', 'line', 'arrow', 'smart-pin', 'static-pin', 'device-pin', 'text'];
         if (!trackableTypes.includes(element.type)) return;
 
         const historyEntry: ElementHistoryEntry = {
@@ -1582,6 +1590,20 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             sides: element.sides,
             // Gradient
             gradient: element.gradient,
+            // Pin-specific properties
+            animationStyle: element.animationStyle,
+            motionScale: element.motionScale,
+            pinLabel: element.pinLabel,
+            pinLabelFontSize: element.pinLabelFontSize,
+            pinLabelColor: element.pinLabelColor,
+            pinLabelFontWeight: element.pinLabelFontWeight,
+            pinLabelFontFamily: element.pinLabelFontFamily,
+            // Text-specific properties
+            text: element.text,
+            fontSize: element.fontSize,
+            fontFamily: element.fontFamily,
+            fontWeight: element.fontWeight,
+            textAlign: element.textAlign,
             // Timestamp
             timestamp: Date.now(),
         };
@@ -1653,10 +1675,28 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             sides: entry.sides,
             // Gradient - from history
             gradient: entry.gradient,
+            // Pin-specific properties - from history
+            animationStyle: entry.animationStyle,
+            motionScale: entry.motionScale,
+            pinLabel: entry.pinLabel,
+            pinLabelFontSize: entry.pinLabelFontSize,
+            pinLabelColor: entry.pinLabelColor,
+            pinLabelFontWeight: entry.pinLabelFontWeight,
+            pinLabelFontFamily: entry.pinLabelFontFamily,
+            // Text-specific properties - from history
+            text: entry.text,
+            fontSize: entry.fontSize,
+            fontFamily: entry.fontFamily,
+            fontWeight: entry.fontWeight,
+            textAlign: entry.textAlign,
         } as MapElement;
 
         // For specific shapes, adjust position calculation
         if (entry.type === 'circle' || entry.type === 'polygon' || entry.type === 'triangle') {
+            newElement.x = centerX;
+            newElement.y = centerY;
+        } else if (entry.type === 'smart-pin' || entry.type === 'static-pin' || entry.type === 'device-pin') {
+            // Pins are positioned by their bottom point, so center them
             newElement.x = centerX;
             newElement.y = centerY;
         }
@@ -1812,6 +1852,8 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     height: 40,
                     text: 'Double-click to edit',
                     ...defaultElement,
+                    fillColor: '#000000', // Black text by default
+                    fillOpacity: 1, // Solid opacity for text
                 } as MapElement;
                 break;
             case 'smart-pin':
@@ -2340,6 +2382,39 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         });
         setUnifiedHistoryStep(prev => Math.min(prev + 1, 49));
     };
+
+    // Eyedropper functions
+    const activateEyedropper = useCallback((elementId: string, property: 'fillColor' | 'strokeColor' | 'pinLabelColor' | 'labelColor') => {
+        setEyedropperActive(true);
+        setEyedropperTarget({ elementId, property });
+        setEyedropperPreviewColor(null);
+    }, []);
+
+    const getColorFromCanvas = useCallback((x: number, y: number): string | null => {
+        const stage = stageRef.current;
+        if (!stage) return null;
+
+        try {
+            // Get pixel data at the position
+            const pixelData = stage.toCanvas().getContext('2d')?.getImageData(x, y, 1, 1).data;
+            if (pixelData) {
+                const r = pixelData[0];
+                const g = pixelData[1];
+                const b = pixelData[2];
+                // Convert RGB to hex
+                return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`;
+            }
+        } catch (error) {
+            console.error('Error sampling color:', error);
+        }
+        return null;
+    }, []);
+
+    const deactivateEyedropper = useCallback(() => {
+        setEyedropperActive(false);
+        setEyedropperTarget(null);
+        setEyedropperPreviewColor(null);
+    }, []);
 
     // Save uploaded images state to unified history (for undo/redo of image deletion)
     const saveImagesToHistory = (previousImages: UploadedImageData[], afterImages: UploadedImageData[]) => {
@@ -3067,6 +3142,13 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
     // Keyboard shortcuts - must be after handler definitions to avoid hoisting issues
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
+            // Escape key - cancel eyedropper mode
+            if (e.key === 'Escape' && eyedropperActive) {
+                deactivateEyedropper();
+                e.preventDefault();
+                return;
+            }
+
             // Don't handle shortcuts when typing in input
             if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
                 if (e.key === 'Escape') {
@@ -3337,6 +3419,20 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
         if (updates.cornerRadius !== undefined) historyUpdates.cornerRadius = updates.cornerRadius;
         if (updates.sides !== undefined) historyUpdates.sides = updates.sides;
         if (updates.gradient !== undefined) historyUpdates.gradient = updates.gradient;
+        // Pin-specific properties
+        if (updates.animationStyle !== undefined) historyUpdates.animationStyle = updates.animationStyle;
+        if (updates.motionScale !== undefined) historyUpdates.motionScale = updates.motionScale;
+        if (updates.pinLabel !== undefined) historyUpdates.pinLabel = updates.pinLabel;
+        if (updates.pinLabelFontSize !== undefined) historyUpdates.pinLabelFontSize = updates.pinLabelFontSize;
+        if (updates.pinLabelColor !== undefined) historyUpdates.pinLabelColor = updates.pinLabelColor;
+        if (updates.pinLabelFontWeight !== undefined) historyUpdates.pinLabelFontWeight = updates.pinLabelFontWeight;
+        if (updates.pinLabelFontFamily !== undefined) historyUpdates.pinLabelFontFamily = updates.pinLabelFontFamily;
+        // Text-specific properties
+        if (updates.text !== undefined) historyUpdates.text = updates.text;
+        if (updates.fontSize !== undefined) historyUpdates.fontSize = updates.fontSize;
+        if (updates.fontFamily !== undefined) historyUpdates.fontFamily = updates.fontFamily;
+        if (updates.fontWeight !== undefined) historyUpdates.fontWeight = updates.fontWeight;
+        if (updates.textAlign !== undefined) historyUpdates.textAlign = updates.textAlign;
 
         if (Object.keys(historyUpdates).length > 0) {
             updateElementHistory(id, historyUpdates);
@@ -3969,8 +4065,13 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
             rotation: element.rotation,
             scaleX: element.scaleX || 1,
             scaleY: element.scaleY || 1,
-            draggable: !element.locked && tool === 'select',
+            draggable: !element.locked && tool === 'select' && !isSpacePressedRef.current,
             onClick: () => {
+                // Don't handle clicks when spacebar is pressed (panning mode)
+                if (isSpacePressedRef.current) {
+                    return;
+                }
+
                 if (tool === 'eraser') {
                     // Eraser tool - delete the element
                     handleDeleteElement(element.id);
@@ -4344,7 +4445,13 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     });
                 }
             },
-            onDblClick: () => handleElementDoubleClick(element.id),
+            onDblClick: () => {
+                // Don't handle double-clicks when spacebar is pressed (panning mode)
+                if (isSpacePressedRef.current) {
+                    return;
+                }
+                handleElementDoubleClick(element.id);
+            },
         };
 
         // Render name label if enabled - centered on the element
@@ -4593,9 +4700,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 const smartInnerRadius = smartRadius * 0.45;
                 // Ensure valid color values with fallbacks
                 const smartFillColor = element.fillColor || '#ef4444';
-                const smartStrokeColor = element.strokeColor || '#b91c1c';
                 const smartFillOpacity = element.fillOpacity ?? 1;
-                const smartStrokeWidth = element.strokeWidth ?? 2;
                 return (
                     <Group key={element.id} {...commonProps}>
                         {/* Teardrop outer circle */}
@@ -4605,8 +4710,6 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             radius={smartRadius}
                             fill={smartFillColor}
                             opacity={smartFillOpacity}
-                            stroke={smartStrokeColor}
-                            strokeWidth={smartStrokeWidth}
                         />
                         {/* Bottom triangle point */}
                         <Line
@@ -4618,20 +4721,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             closed={true}
                             fill={smartFillColor}
                             opacity={smartFillOpacity}
-                            stroke={smartStrokeColor}
-                            strokeWidth={smartStrokeWidth}
                             lineJoin="round"
-                        />
-                        {/* Cover stroke between circle and triangle */}
-                        <Line
-                            points={[
-                                -smartRadius * 0.65, smartCircleY + smartRadius * 0.5,
-                                smartRadius * 0.65, smartCircleY + smartRadius * 0.5,
-                            ]}
-                            stroke={smartFillColor}
-                            strokeWidth={4}
-                            opacity={smartFillOpacity}
-                            listening={false}
                         />
                         {/* Inner white circle (hollow center) */}
                         <Circle
@@ -4667,9 +4757,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                 const labelFontFamily = element.pinLabelFontFamily || 'Inter, system-ui, -apple-system, sans-serif';
                 // Ensure valid color values with fallbacks
                 const staticFillColor = element.fillColor || '#22c55e';
-                const staticStrokeColor = element.strokeColor || '#15803d';
                 const staticFillOpacity = element.fillOpacity ?? 1;
-                const staticStrokeWidth = element.strokeWidth ?? 2;
 
                 return (
                     <Group key={element.id} {...commonProps}>
@@ -4681,8 +4769,6 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             height={staticPinHeight}
                             fill={staticFillColor}
                             opacity={staticFillOpacity}
-                            stroke={staticStrokeColor}
-                            strokeWidth={staticStrokeWidth}
                             cornerRadius={staticCornerRadius}
                         />
                         {/* Triangular pointer at bottom */}
@@ -4695,20 +4781,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             closed={true}
                             fill={staticFillColor}
                             opacity={staticFillOpacity}
-                            stroke={staticStrokeColor}
-                            strokeWidth={staticStrokeWidth}
                             lineJoin="round"
-                        />
-                        {/* Cover the stroke line between rectangle and pointer */}
-                        <Line
-                            points={[
-                                -staticPinWidth * 0.18, -staticPointerHeight,
-                                staticPinWidth * 0.18, -staticPointerHeight,
-                            ]}
-                            stroke={staticFillColor}
-                            strokeWidth={staticStrokeWidth + 2}
-                            opacity={staticFillOpacity}
-                            listening={false}
                         />
                         {/* Pin label inside rectangle - hidden while editing */}
                         {editingLabelId !== element.id && (
@@ -5190,6 +5263,21 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                     onDrop={handleDrop}
                     onDragOver={handleDragOver}
                 >
+                    {/* Eyedropper Preview */}
+                    {eyedropperActive && eyedropperPreviewColor && (
+                        <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-50 bg-card border-2 border-primary rounded-lg shadow-lg px-4 py-2 flex items-center gap-3">
+                            <div
+                                className="w-8 h-8 rounded-md border-2 border-border shadow-sm"
+                                style={{ backgroundColor: eyedropperPreviewColor }}
+                            />
+                            <div className="flex flex-col">
+                                <span className="text-xs text-muted-foreground">Sampling</span>
+                                <span className="text-sm font-mono font-semibold">{eyedropperPreviewColor.toUpperCase()}</span>
+                            </div>
+                            <span className="text-xs text-muted-foreground">Click to apply • ESC to cancel</span>
+                        </div>
+                    )}
+
                     {/* Floating Zoom Controls */}
                     <div className="absolute bottom-4 left-4 z-10 flex flex-col gap-2 bg-card border border-border rounded-lg shadow-sm p-1">
                         <Button variant="ghost" size="icon" onClick={handleZoomIn} title="Zoom In">
@@ -5232,6 +5320,25 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                         draggable={false}
                         onWheel={handleWheel}
                         onMouseDown={(e) => {
+                            // Eyedropper mode - sample color on click
+                            if (eyedropperActive && e.evt.button === 0 && eyedropperTarget) {
+                                const stage = e.target.getStage();
+                                if (stage) {
+                                    const pointerPos = stage.getPointerPosition();
+                                    if (pointerPos) {
+                                        const color = getColorFromCanvas(pointerPos.x, pointerPos.y);
+                                        if (color) {
+                                            // Apply the sampled color
+                                            updateElement(eyedropperTarget.elementId, { [eyedropperTarget.property]: color });
+                                            toast.success(`Color ${color} applied`);
+                                        }
+                                    }
+                                }
+                                deactivateEyedropper();
+                                e.evt.preventDefault();
+                                return;
+                            }
+
                             // Spacebar + left-click to drag canvas (pan mode)
                             if (e.evt.button === 0 && isSpacePressedRef.current) {
                                 setIsSpaceDragging(true);
@@ -5360,6 +5467,19 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             }
                         }}
                         onMouseMove={(e) => {
+                            // Eyedropper mode - show preview color on hover
+                            if (eyedropperActive) {
+                                const stage = e.target.getStage();
+                                if (stage) {
+                                    const pointerPos = stage.getPointerPosition();
+                                    if (pointerPos) {
+                                        const color = getColorFromCanvas(pointerPos.x, pointerPos.y);
+                                        setEyedropperPreviewColor(color);
+                                    }
+                                }
+                                return;
+                            }
+
                             // Track eraser cursor position
                             if (tool === 'eraser') {
                                 const pos = getCanvasPositionFromKonvaEvent(e);
@@ -5514,7 +5634,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                             width: CANVAS_WIDTH,
                             height: CANVAS_HEIGHT,
                             background: '#ffffff',
-                            cursor: (isRightMouseDown || isSpaceDragging) ? 'grabbing' : tool === 'eraser' ? 'none' : 'default'
+                            cursor: eyedropperActive ? 'crosshair' : (isRightMouseDown || isSpaceDragging) ? 'grabbing' : tool === 'eraser' ? 'none' : 'default'
                         }}
                     >
                         <Layer>
@@ -5526,8 +5646,12 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                     x={mapImagePosition.x}
                                     y={mapImagePosition.y}
                                     rotation={mapImageRotation}
-                                    draggable={tool === 'select'}
+                                    draggable={tool === 'select' && !isSpacePressedRef.current}
                                     onClick={(e) => {
+                                        // Don't handle clicks when spacebar is pressed (panning mode)
+                                        if (isSpacePressedRef.current) {
+                                            return;
+                                        }
                                         if (tool === 'select') {
                                             e.cancelBubble = true;
                                             setIsImageSelected(true);
@@ -5536,6 +5660,10 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                         }
                                     }}
                                     onTap={(e) => {
+                                        // Don't handle taps when spacebar is pressed (panning mode)
+                                        if (isSpacePressedRef.current) {
+                                            return;
+                                        }
                                         if (tool === 'select') {
                                             e.cancelBubble = true;
                                             setIsImageSelected(true);
@@ -5789,7 +5917,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                     width={uploadedImg.width}
                                     height={uploadedImg.height}
                                     rotation={uploadedImg.rotation ?? 0}
-                                    draggable={tool === 'select'}
+                                    draggable={tool === 'select' && !isSpacePressedRef.current}
                                     ref={(node) => {
                                         // Cache the group when it mounts (required for eraser composite operation)
                                         if (node && uploadedImg.image) {
@@ -5800,6 +5928,10 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                         }
                                     }}
                                     onClick={(e) => {
+                                        // Don't handle clicks when spacebar is pressed (panning mode)
+                                        if (isSpacePressedRef.current) {
+                                            return;
+                                        }
                                         if (tool === 'select') {
                                             e.cancelBubble = true;
                                             // Support multi-select with Shift key
@@ -5817,6 +5949,10 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                         }
                                     }}
                                     onTap={(e) => {
+                                        // Don't handle taps when spacebar is pressed (panning mode)
+                                        if (isSpacePressedRef.current) {
+                                            return;
+                                        }
                                         if (tool === 'select') {
                                             e.cancelBubble = true;
                                             setSelectedImageIds([uploadedImg.id]);
@@ -6790,6 +6926,7 @@ const MapEditor = ({ storeId, onSave }: MapEditorProps) => {
                                 activeTool={tool}
                                 eraserSize={eraserSize}
                                 onEraserSizeChange={setEraserSize}
+                                onActivateEyedropper={activateEyedropper}
                                 onClearEraserStrokes={() => {
                                     // Clear legacy mapImage eraser strokes
                                     setEraserStrokes([]);

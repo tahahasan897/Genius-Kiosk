@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Stage, Layer, Image as KonvaImage, Rect, Circle, Line, RegularPolygon, Group, Text as KonvaText } from 'react-konva';
+import { Stage, Layer, Image as KonvaImage, Rect, Circle, Line, Arrow, RegularPolygon, Group, Text as KonvaText } from 'react-konva';
 import Konva from 'konva';
 import useImage from 'use-image';
 import { MapPin, Loader2, AlertCircle, ZoomIn, ZoomOut, Maximize } from 'lucide-react';
@@ -840,11 +840,12 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
         );
       case 'arrow':
         return (
-          <Line
+          <Arrow
             key={element.id}
             points={element.points || [0, 0, 100, 0]}
             stroke={element.strokeColor}
             strokeWidth={element.strokeWidth}
+            fill={element.strokeColor}
             dash={getStrokeDash(element.strokeStyle)}
           />
         );
@@ -870,6 +871,7 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
             fill={element.fillColor}
             align={element.textAlign}
             width={element.width}
+            padding={10}
             letterSpacing={element.letterSpacing || 0}
             lineHeight={element.lineHeight || 1}
             textDecoration={element.textDecoration || 'none'}
@@ -908,7 +910,7 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
 
         return (
           <Group key={element.id} id={`static-pin-${element.id}`} x={element.x} y={element.y}>
-            {/* Rectangle body with rounded corners */}
+            {/* Rectangle body with rounded corners (no stroke) */}
             <Rect
               x={-staticPinWidth / 2}
               y={-staticPinHeight - staticPointerHeight}
@@ -916,11 +918,9 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
               height={staticPinHeight}
               fill={element.fillColor}
               opacity={element.fillOpacity}
-              stroke={element.strokeColor}
-              strokeWidth={element.strokeWidth}
               cornerRadius={staticCornerRadius}
             />
-            {/* Triangular pointer at bottom */}
+            {/* Triangular pointer at bottom (no stroke) */}
             <Line
               points={[
                 -staticPinWidth * 0.2, -staticPointerHeight,
@@ -930,19 +930,7 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
               closed={true}
               fill={element.fillColor}
               opacity={element.fillOpacity}
-              stroke={element.strokeColor}
-              strokeWidth={element.strokeWidth}
               lineJoin="round"
-            />
-            {/* Cover the stroke line between rectangle and pointer */}
-            <Line
-              points={[
-                -staticPinWidth * 0.18, -staticPointerHeight,
-                staticPinWidth * 0.18, -staticPointerHeight,
-              ]}
-              stroke={element.fillColor}
-              strokeWidth={(element.strokeWidth || 2) + 2}
-              opacity={element.fillOpacity}
             />
             {/* Pin label inside rectangle */}
             {element.pinLabel && (
@@ -1061,9 +1049,8 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
     const innerCircleRadius = pinRadius * 0.45;
     const innerCircleY = -pinRadius - pinRadius * 0.2;
 
-    // Use element's colors instead of hardcoded red
+    // Use element's color (no stroke)
     const pinFillColor = element.fillColor || '#ef4444';
-    const pinStrokeColor = element.strokeColor || '#dc2626';
 
     // Floating label dimensions - scale with pin size (1.5x the pin)
     const labelScale = 1.5;
@@ -1127,14 +1114,12 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
 
         {/* Animated pin group - only this gets animated */}
         <Group id={`smart-pin-${element.id}`}>
-          {/* Teardrop pin - outer shape (uses element's colors) */}
+          {/* Teardrop pin - outer shape (uses element's color, no stroke) */}
           <Circle
             x={0}
             y={innerCircleY}
             radius={pinRadius}
             fill={pinFillColor}
-            stroke={pinStrokeColor}
-            strokeWidth={element.strokeWidth || 2}
           />
 
           {/* Bottom triangle point of the teardrop */}
@@ -1146,19 +1131,7 @@ const StoreMap = ({ selectedProduct, storeId = 1 }: StoreMapProps) => {
             ]}
             closed={true}
             fill={pinFillColor}
-            stroke={pinStrokeColor}
-            strokeWidth={element.strokeWidth || 2}
             lineJoin="round"
-          />
-
-          {/* Cover the stroke line between circle and triangle */}
-          <Line
-            points={[
-              -pinRadius * 0.65, innerCircleY + pinRadius * 0.5,
-              pinRadius * 0.65, innerCircleY + pinRadius * 0.5,
-            ]}
-            stroke={pinFillColor}
-            strokeWidth={4}
           />
 
           {/* Inner white circle (hollow center) */}
